@@ -118,8 +118,8 @@ export const GameBoard = ({ definition, state }: GameBoardProps) => {
     >
       <BoardSurface
         style={{
-          width: BOARD_DIMENSIONS.width,
-          height: BOARD_DIMENSIONS.height,
+          // width: BOARD_DIMENSIONS.width,
+          // height: BOARD_DIMENSIONS.height,
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
         }}
       >
@@ -230,8 +230,13 @@ const Viewport = styled.div<{ 'data-panning'?: boolean }>`
   border: 4px solid #3d2a18;
   border-radius: 24px;
   background: linear-gradient(145deg, #f5e5bc, #cbb189);
-  min-height: 520px;
+  ${({ ['data-panning']: dataPanning }) =>
+    dataPanning &&
+    css`
+      min-height: 520px;
+    `}
   touch-action: none;
+  user-select: none;
   cursor: ${({ ['data-panning']: dataPanning }) => (dataPanning ? 'grabbing' : 'grab')};
   width: 100%;
   max-width: 100%;
