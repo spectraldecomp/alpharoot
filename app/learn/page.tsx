@@ -31,8 +31,7 @@ const FACTION_META: Record<FactionId, { label: string; color: string }> = {
 }
 
 const VICTORY_TARGET = 30
-const formatPhaseLabel = (phase: GameState['turn']['phase']) =>
-  phase.charAt(0).toUpperCase() + phase.slice(1)
+const formatPhaseLabel = (phase: GameState['turn']['phase']) => phase.charAt(0).toUpperCase() + phase.slice(1)
 
 export default function Home() {
   const searchParams = useSearchParams()
@@ -67,7 +66,7 @@ export default function Home() {
         playerAction: lastPlayerAction,
         socialConversation: playerConversation,
       }),
-    [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation],
+    [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation]
   )
 
   // March action state
@@ -130,7 +129,7 @@ export default function Home() {
       const previousPhase = next.turn.phase
       const newPhase = getNextPhase(previousPhase)
       description = `Advanced ${FACTION_META[actingFaction].label} from ${formatPhaseLabel(
-        previousPhase,
+        previousPhase
       )} to ${formatPhaseLabel(newPhase)}`
 
       if (previousPhase === 'evening') {
@@ -203,23 +202,26 @@ export default function Home() {
     setMarchWarriorCount(1)
   }, [])
 
-  const handleClearingClick = useCallback((clearingId: string) => {
-    if (!isMarchMode) return
+  const handleClearingClick = useCallback(
+    (clearingId: string) => {
+      if (!isMarchMode) return
 
-    if (!marchFromClearing) {
-      // First click - select source clearing
-      setMarchFromClearing(clearingId)
-      setMarchWarriorCount(1)
-    } else if (!marchToClearing) {
-      // Second click - select destination clearing
-      if (clearingId === marchFromClearing) {
-        // Clicked same clearing - deselect
-        setMarchFromClearing(null)
-      } else {
-        setMarchToClearing(clearingId)
+      if (!marchFromClearing) {
+        // First click - select source clearing
+        setMarchFromClearing(clearingId)
+        setMarchWarriorCount(1)
+      } else if (!marchToClearing) {
+        // Second click - select destination clearing
+        if (clearingId === marchFromClearing) {
+          // Clicked same clearing - deselect
+          setMarchFromClearing(null)
+        } else {
+          setMarchToClearing(clearingId)
+        }
       }
-    }
-  }, [isMarchMode, marchFromClearing, marchToClearing])
+    },
+    [isMarchMode, marchFromClearing, marchToClearing]
+  )
 
   const executeMarch = useCallback(async () => {
     if (!marchFromClearing || !marchToClearing) return
@@ -255,7 +257,7 @@ export default function Home() {
   // Get valid clearings for march selection
   const validFromClearings = useMemo(() => {
     if (!isMarchMode || marchFromClearing) return []
-    
+
     return Object.entries(gameState.board.clearings)
       .filter(([, clearing]) => (clearing.warriors.marquise ?? 0) > 0)
       .map(([id]) => id)
@@ -263,10 +265,10 @@ export default function Home() {
 
   const validToClearings = useMemo(() => {
     if (!isMarchMode || !marchFromClearing || marchToClearing) return []
-    
+
     const fromClearing = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === marchFromClearing)
     if (!fromClearing) return []
-    
+
     return fromClearing.adjacentClearings
   }, [isMarchMode, marchFromClearing, marchToClearing])
 
@@ -304,11 +306,14 @@ export default function Home() {
     setBattleDefender(null)
   }, [])
 
-  const handleBattleClearingClick = useCallback((clearingId: string) => {
-    if (!isBattleMode) return
-    setBattleClearing(clearingId)
-    setBattleDefender(null)
-  }, [isBattleMode])
+  const handleBattleClearingClick = useCallback(
+    (clearingId: string) => {
+      if (!isBattleMode) return
+      setBattleClearing(clearingId)
+      setBattleDefender(null)
+    },
+    [isBattleMode]
+  )
 
   const executeBattle = useCallback(async () => {
     if (!battleClearing || !battleDefender) return
@@ -333,18 +338,18 @@ export default function Home() {
 
       const data = await response.json()
       setGameState(data.state)
-      
+
       // Show detailed battle results
       const attackerName = 'Marquise de Cat'
       const defenderName = FACTION_META[battleDefender].label
-      
+
       let resultMessage = `🗡️ Battle Results in Clearing #${battleClearing.toUpperCase()}\n\n`
-      
+
       // Dice rolls
       resultMessage += `📊 Dice Rolls:\n`
       resultMessage += `Attacker (${attackerName}): ${data.dice[0]}\n`
       resultMessage += `Defender (${defenderName}): ${data.dice[1]}\n\n`
-      
+
       // Hits breakdown
       resultMessage += `💥 Hits Dealt:\n`
       resultMessage += `${attackerName}: ${data.attackerHits} total`
@@ -357,7 +362,7 @@ export default function Home() {
         resultMessage += ` (${data.defenderRolledHits} rolled + ${data.defenderExtraHits} extra)`
       }
       resultMessage += `\n\n`
-      
+
       // Casualties
       resultMessage += `☠️ Casualties:\n`
       resultMessage += `${defenderName} lost:\n`
@@ -370,7 +375,7 @@ export default function Home() {
       if (data.defenderTokensRemoved.length > 0) {
         resultMessage += `  - ${data.defenderTokensRemoved.length} token(s)\n`
       }
-      
+
       resultMessage += `${attackerName} lost:\n`
       if (data.attackerWarriorsRemoved > 0) {
         resultMessage += `  - ${data.attackerWarriorsRemoved} warrior(s)\n`
@@ -381,7 +386,7 @@ export default function Home() {
       if (data.attackerTokensRemoved.length > 0) {
         resultMessage += `  - ${data.attackerTokensRemoved.length} token(s)\n`
       }
-      
+
       // Victory points
       if (data.victoryPointsEarned.attacker > 0 || data.victoryPointsEarned.defender > 0) {
         resultMessage += `\n⭐ Victory Points Earned:\n`
@@ -392,9 +397,9 @@ export default function Home() {
           resultMessage += `${defenderName}: +${data.victoryPointsEarned.defender} VP\n`
         }
       }
-      
+
       alert(resultMessage)
-      
+
       cancelBattle()
     } catch (error) {
       console.error('Battle error:', error)
@@ -405,13 +410,13 @@ export default function Home() {
   // Get valid clearings for battle selection
   const validBattleClearings = useMemo(() => {
     if (!isBattleMode || battleClearing) return []
-    
+
     return Object.entries(gameState.board.clearings)
       .filter(([, clearing]) => {
         const marquiseWarriors = clearing.warriors.marquise ?? 0
         // Check if there are any enemy pieces (warriors, buildings, or tokens)
-        const hasEnemyPieces = Object.entries(clearing.warriors)
-          .some(([faction]) => faction !== 'marquise') ||
+        const hasEnemyPieces =
+          Object.entries(clearing.warriors).some(([faction]) => faction !== 'marquise') ||
           clearing.buildings.some(b => b.faction !== 'marquise') ||
           clearing.tokens.some(t => t.faction !== 'marquise')
         return marquiseWarriors > 0 && hasEnemyPieces
@@ -422,31 +427,31 @@ export default function Home() {
   // Get available defenders in selected clearing
   const availableDefenders = useMemo(() => {
     if (!battleClearing) return []
-    
+
     const clearing = gameState.board.clearings[battleClearing]
     if (!clearing) return []
-    
+
     // Get all factions with any pieces in the clearing (warriors, buildings, or tokens)
     const factionsWithPieces = new Set<FactionId>()
-    
+
     Object.entries(clearing.warriors).forEach(([faction]) => {
       if (faction !== 'marquise') {
         factionsWithPieces.add(faction as FactionId)
       }
     })
-    
+
     clearing.buildings.forEach(building => {
       if (building.faction !== 'marquise') {
         factionsWithPieces.add(building.faction)
       }
     })
-    
+
     clearing.tokens.forEach(token => {
       if (token.faction !== 'marquise') {
         factionsWithPieces.add(token.faction)
       }
     })
-    
+
     return Array.from(factionsWithPieces)
   }, [battleClearing, gameState.board.clearings])
 
@@ -519,10 +524,13 @@ export default function Home() {
     setBuildClearing(null)
   }, [])
 
-  const handleBuildClearingClick = useCallback((clearingId: string) => {
-    if (!buildMode) return
-    setBuildClearing(clearingId)
-  }, [buildMode])
+  const handleBuildClearingClick = useCallback(
+    (clearingId: string) => {
+      if (!buildMode) return
+      setBuildClearing(clearingId)
+    },
+    [buildMode]
+  )
 
   const executeBuild = useCallback(async () => {
     if (!buildMode || !buildClearing) return
@@ -547,20 +555,20 @@ export default function Home() {
 
       const data = await response.json()
       setGameState(data.state)
-      
+
       // Calculate VP earned
       const track = gameState.factions.marquise.buildingTracks[buildMode]
       const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
       const vpEarned = trackDef.steps[track.builtCount].victoryPoints
       const woodCost = trackDef.steps[track.builtCount].costWood
-      
+
       alert(
         `🏛️ Successfully built ${buildMode} in clearing #${buildClearing.toUpperCase()}\n\n` +
-        `Wood spent: ${woodCost}\n` +
-        `Victory Points earned: ${vpEarned}\n` +
-        `New VP total: ${data.state.victoryTrack.marquise}`
+          `Wood spent: ${woodCost}\n` +
+          `Victory Points earned: ${vpEarned}\n` +
+          `New VP total: ${data.state.victoryTrack.marquise}`
       )
-      
+
       cancelBuild()
     } catch (error) {
       console.error('Build error:', error)
@@ -571,16 +579,16 @@ export default function Home() {
   // Get valid clearings for building
   const validBuildClearings = useMemo(() => {
     if (!buildMode || buildClearing) return []
-    
+
     return Object.entries(gameState.board.clearings)
       .filter(([clearingId, clearing]) => {
         const marquiseWarriors = clearing.warriors.marquise ?? 0
         if (marquiseWarriors === 0) return false
-        
+
         // Check if clearing has available building slots
         const clearingDef = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === clearingId)
         if (!clearingDef) return false
-        
+
         return clearing.buildings.length < clearingDef.buildingSlots
       })
       .map(([id]) => id)
@@ -615,11 +623,14 @@ export default function Home() {
     setRecruitWarriorCount(1)
   }, [])
 
-  const handleRecruitClearingClick = useCallback((clearingId: string) => {
-    if (!isRecruitMode) return
-    setRecruitClearing(clearingId)
-    setRecruitWarriorCount(1)
-  }, [isRecruitMode])
+  const handleRecruitClearingClick = useCallback(
+    (clearingId: string) => {
+      if (!isRecruitMode) return
+      setRecruitClearing(clearingId)
+      setRecruitWarriorCount(1)
+    },
+    [isRecruitMode]
+  )
 
   const executeRecruit = useCallback(async () => {
     if (!recruitClearing) return
@@ -644,12 +655,12 @@ export default function Home() {
 
       const data = await response.json()
       setGameState(data.state)
-      
+
       alert(
         `⚔️ Successfully recruited ${recruitWarriorCount} warrior(s) in clearing #${recruitClearing.toUpperCase()}\n\n` +
-        `Warriors in supply: ${data.state.factions.marquise.warriorsInSupply}`
+          `Warriors in supply: ${data.state.factions.marquise.warriorsInSupply}`
       )
-      
+
       cancelRecruit()
     } catch (error) {
       console.error('Recruit error:', error)
@@ -660,7 +671,7 @@ export default function Home() {
   // Get valid clearings for recruiting
   const validRecruitClearings = useMemo(() => {
     if (!isRecruitMode || recruitClearing) return []
-    
+
     return Object.entries(gameState.board.clearings)
       .filter(([, clearing]) => {
         // Must have recruiters in the clearing
@@ -675,14 +686,14 @@ export default function Home() {
   // Get max warriors that can be recruited in selected clearing
   const maxRecruitWarriors = useMemo(() => {
     if (!recruitClearing) return 0
-    
+
     const clearing = gameState.board.clearings[recruitClearing]
     if (!clearing) return 0
-    
+
     const recruitersInClearing = clearing.buildings.filter(
       b => b.faction === 'marquise' && b.type === 'recruiter'
     ).length
-    
+
     // Can recruit up to the number of recruiters, but limited by supply
     return Math.min(recruitersInClearing, gameState.factions.marquise.warriorsInSupply)
   }, [recruitClearing, gameState.board.clearings, gameState.factions.marquise.warriorsInSupply])
@@ -734,11 +745,7 @@ export default function Home() {
         <Container>
           <TutorChatSection>
             <ChatContainer ref={tutorChatRef}>
-              <ChatViewer
-                conversation={tutorConversation}
-                isReplying={loadingTutorResponse}
-                typingAvatar="tutor"
-              />
+              <ChatViewer conversation={tutorConversation} isReplying={loadingTutorResponse} typingAvatar="tutor" />
             </ChatContainer>
             <ChatInput
               message={tutorMessage}
@@ -776,10 +783,10 @@ export default function Home() {
                 definition={WOODLAND_BOARD_DEFINITION}
                 state={gameState}
                 selectableClearings={
-                  isMarchMode 
-                    ? [...validFromClearings, ...validToClearings] 
-                    : isBattleMode 
-                    ? validBattleClearings 
+                  isMarchMode
+                    ? [...validFromClearings, ...validToClearings]
+                    : isBattleMode
+                    ? validBattleClearings
                     : buildMode
                     ? validBuildClearings
                     : isRecruitMode
@@ -787,13 +794,18 @@ export default function Home() {
                     : []
                 }
                 selectedClearing={
-                  marchFromClearing || marchToClearing || battleClearing || buildClearing || recruitClearing || undefined
+                  marchFromClearing ||
+                  marchToClearing ||
+                  battleClearing ||
+                  buildClearing ||
+                  recruitClearing ||
+                  undefined
                 }
                 onClearingClick={
-                  isMarchMode 
-                    ? handleClearingClick 
-                    : isBattleMode 
-                    ? handleBattleClearingClick 
+                  isMarchMode
+                    ? handleClearingClick
+                    : isBattleMode
+                    ? handleBattleClearingClick
                     : buildMode
                     ? handleBuildClearingClick
                     : isRecruitMode
@@ -805,7 +817,8 @@ export default function Home() {
             <HudGrid>
               <HudPanel>
                 <HudTitle>
-                  <Image src="/image/cat.png" alt="Marquise de Cat" width={24} height={24} />Actions
+                  <Image src="/image/cat.png" alt="Marquise de Cat" width={24} height={24} />
+                  Actions
                 </HudTitle>
                 {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
                   <ActionSection>
@@ -820,12 +833,8 @@ export default function Home() {
                   <ActionSection>
                     <PhaseLabel>Daylight</PhaseLabel>
                     <ActionGrid>
-                      <ActionButton onClick={toggleBattle}>
-                        {isBattleMode ? 'Cancel Battle' : 'Battle'}
-                      </ActionButton>
-                      <ActionButton onClick={toggleMarch}>
-                        {isMarchMode ? 'Cancel March' : 'March'}
-                      </ActionButton>
+                      <ActionButton onClick={toggleBattle}>{isBattleMode ? 'Cancel Battle' : 'Battle'}</ActionButton>
+                      <ActionButton onClick={toggleMarch}>{isMarchMode ? 'Cancel March' : 'March'}</ActionButton>
                       <ActionButton onClick={toggleRecruit}>
                         {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
                       </ActionButton>
@@ -897,9 +906,7 @@ export default function Home() {
                 {isBattleMode && (
                   <MarchPanel>
                     <MarchTitle>Battle Action</MarchTitle>
-                    {!battleClearing && (
-                      <MarchInstruction>Select a clearing with enemies to battle</MarchInstruction>
-                    )}
+                    {!battleClearing && <MarchInstruction>Select a clearing with enemies to battle</MarchInstruction>}
                     {battleClearing && !battleDefender && (
                       <>
                         <MarchInstruction>
@@ -949,17 +956,21 @@ export default function Home() {
                           Select a clearing with Marquise warriors and available building slots
                         </MarchInstruction>
                         <MarchInstruction>
-                          Wood cost: <strong>{(() => {
-                            const track = gameState.factions.marquise.buildingTracks[buildMode]
-                            const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
-                            if (track.builtCount >= trackDef.steps.length) return 'MAX'
-                            return trackDef.steps[track.builtCount].costWood
-                          })()}</strong>
+                          Wood cost:{' '}
+                          <strong>
+                            {(() => {
+                              const track = gameState.factions.marquise.buildingTracks[buildMode]
+                              const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
+                              if (track.builtCount >= trackDef.steps.length) return 'MAX'
+                              return trackDef.steps[track.builtCount].costWood
+                            })()}
+                          </strong>
                           {' · '}
                           Wood available: <strong>{gameState.factions.marquise.woodInSupply}</strong>
                         </MarchInstruction>
                         <MarchInstruction>
-                          Buildings built: <strong>{gameState.factions.marquise.buildingTracks[buildMode].builtCount} / 6</strong>
+                          Buildings built:{' '}
+                          <strong>{gameState.factions.marquise.buildingTracks[buildMode].builtCount} / 6</strong>
                         </MarchInstruction>
                       </>
                     )}
@@ -986,9 +997,7 @@ export default function Home() {
                     <MarchTitle>Recruit Warriors</MarchTitle>
                     {!recruitClearing && (
                       <>
-                        <MarchInstruction>
-                          Select a clearing with Marquise recruiters
-                        </MarchInstruction>
+                        <MarchInstruction>Select a clearing with Marquise recruiters</MarchInstruction>
                         <MarchInstruction>
                           Warriors in supply: <strong>{gameState.factions.marquise.warriorsInSupply}</strong>
                         </MarchInstruction>
@@ -1000,12 +1009,14 @@ export default function Home() {
                           Recruit in <strong>#{recruitClearing.toUpperCase()}</strong>
                         </MarchInstruction>
                         <MarchInstruction>
-                          Recruiters in clearing: <strong>{(() => {
-                            const clearing = gameState.board.clearings[recruitClearing]
-                            return clearing.buildings.filter(
-                              b => b.faction === 'marquise' && b.type === 'recruiter'
-                            ).length
-                          })()}</strong>
+                          Recruiters in clearing:{' '}
+                          <strong>
+                            {(() => {
+                              const clearing = gameState.board.clearings[recruitClearing]
+                              return clearing.buildings.filter(b => b.faction === 'marquise' && b.type === 'recruiter')
+                                .length
+                            })()}
+                          </strong>
                         </MarchInstruction>
                         <WarriorSelector>
                           <label>Warriors to recruit:</label>
@@ -1035,7 +1046,7 @@ export default function Home() {
                 )}
                 {gameState.turn.currentFaction !== 'marquise' && (
                   <ActionSection>
-                    <DisabledMessage>Wait for Marquise de Cat's turn</DisabledMessage>
+                    <DisabledMessage>Wait for Marquise de Cat&apos;s turn</DisabledMessage>
                   </ActionSection>
                 )}
               </HudPanel>
@@ -1422,7 +1433,7 @@ const MarchInstruction = styled.div`
   font-size: 13px;
   color: #3d2a18;
   margin-bottom: 10px;
-  
+
   strong {
     color: #d96a3d;
     font-weight: 700;
@@ -1434,14 +1445,14 @@ const WarriorSelector = styled.div`
   flex-direction: column;
   gap: 6px;
   margin-bottom: 10px;
-  
+
   label {
     font-size: 12px;
     color: #3d2a18;
     font-weight: 600;
   }
-  
-  input[type="range"] {
+
+  input[type='range'] {
     width: 100%;
     accent-color: #d96a3d;
   }

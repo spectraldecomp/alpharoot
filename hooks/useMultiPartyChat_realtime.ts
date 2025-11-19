@@ -1,4 +1,4 @@
-import { ChatCompletionParams } from '@/app/api/chatComplete/route'
+import { MultiPartyChat } from '@/app/learn/page'
 import { SCENARIOS } from '@/constants/scenarios'
 import { ALLIANCE_SYSTEM_PROMPT } from '@/prompts/alliance'
 import { EYRIE_SYSTEM_PROMPT } from '@/prompts/eyrie'
@@ -7,9 +7,9 @@ import { last } from 'lodash'
 import { useCallback, useState } from 'react'
 import { useDebounce } from 'react-use'
 
-export type MultiPartyChat = (ChatCompletionParams['conversation'][number] & {
-  faction?: 'cat' | 'alliance' | 'eyrie'
-})[]
+const DEBOUNCE_DELAY_MS = 5000
+
+const RESPONSE_PROBABILITY = 0.7
 
 export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
   const [eyrieChatComplete, { isLoading: loadingEyrieResponse }] = useChatCompleteMutation()
@@ -23,7 +23,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
 
   const eyrieChat = useCallback(
     async (conversation: MultiPartyChat) => {
-      const isRespond = Math.random() < 0.7
+      const isRespond = Math.random() < RESPONSE_PROBABILITY
       if (isRespond) {
         await eyrieChatComplete({
           conversation: [
@@ -45,7 +45,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
 
   const allianceChat = useCallback(
     async (conversation: MultiPartyChat) => {
-      const isRespond = Math.random() < 0.7
+      const isRespond = Math.random() < RESPONSE_PROBABILITY
       if (isRespond) {
         await allianceChatComplete({
           conversation: [
@@ -80,7 +80,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
         eyrieChat(conversation)
       }
     },
-    5000,
+    DEBOUNCE_DELAY_MS,
     [conversation, eyrieChat, loadingEyrieResponse]
   )
 
@@ -90,7 +90,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
         allianceChat(conversation)
       }
     },
-    5000,
+    DEBOUNCE_DELAY_MS,
     [conversation, allianceChat, loadingAllianceResponse]
   )
 

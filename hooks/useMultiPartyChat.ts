@@ -1,14 +1,10 @@
-import { ChatCompletionParams } from '@/app/api/chatComplete/route'
+import { MultiPartyChat } from '@/app/learn/page'
 import { SCENARIOS } from '@/constants/scenarios'
 import { ALLIANCE_SYSTEM_PROMPT } from '@/prompts/alliance'
 import { EYRIE_SYSTEM_PROMPT } from '@/prompts/eyrie'
 import { useChatCompleteMutation } from '@/redux/api/common'
 import { last } from 'lodash'
 import { useCallback, useState } from 'react'
-
-export type MultiPartyChat = (ChatCompletionParams['conversation'][number] & {
-  faction?: 'cat' | 'alliance' | 'eyrie'
-})[]
 
 export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
   const [playerChatComplete, { isLoading: loadingPlayerResponse }] = useChatCompleteMutation()
