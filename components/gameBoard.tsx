@@ -7,6 +7,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 interface GameBoardProps {
   definition: BoardDefinition
   state: GameState
+  selectableClearings?: string[]
+  selectedClearing?: string
+  onClearingClick?: (clearingId: string) => void
 }
 
 const SUIT_COLORS: Record<Suit, string> = {
@@ -19,7 +22,7 @@ const SUIT_COLORS: Record<Suit, string> = {
 
 const SUIT_ICONS: Record<Suit, string> = {
   fox: '🦊',
-  rabbit: '🐇',
+  rabbit: '🐰',
   mouse: '🐭',
   bird: '🕊️',
   none: '🌲',
@@ -36,7 +39,13 @@ const MIN_ZOOM = 0.55
 const MAX_ZOOM = 2.2
 const ZOOM_STEP = 0.12
 
-export const GameBoard = ({ definition, state }: GameBoardProps) => {
+export const GameBoard = ({
+  definition,
+  state,
+  selectableClearings = [],
+  selectedClearing,
+  onClearingClick,
+}: GameBoardProps) => {
   const [scale, setScale] = useState(0.85)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
@@ -146,9 +155,30 @@ export const GameBoard = ({ definition, state }: GameBoardProps) => {
         {definition.clearings.map(clearing => {
           const clearingState = state.board.clearings[clearing.id]
           const warriors = Object.entries(clearingState?.warriors ?? {})
+          const isSelectable = selectableClearings.includes(clearing.id)
+          const isSelected = selectedClearing === clearing.id
+          
           return (
-            <ClearingNode key={clearing.id} style={{ left: clearing.x, top: clearing.y }}>
-              <ClearingCircle suit={clearing.suit}>
+            <ClearingNode
+              key={clearing.id}
+              style={{ left: clearing.x, top: clearing.y }}
+              data-selectable={isSelectable}
+              data-selected={isSelected}
+              data-board-control={isSelectable ? 'true' : undefined}
+            >
+              <ClearingCircle
+                suit={clearing.suit}
+                data-selectable={isSelectable}
+                data-selected={isSelected}
+                data-board-control={isSelectable ? 'true' : undefined}
+                onClick={(e) => {
+                  if (isSelectable) {
+                    e.stopPropagation()
+                    onClearingClick?.(clearing.id)
+                  }
+                }}
+                style={{ cursor: isSelectable ? 'pointer' : 'default' }}
+              >
                 <span>{SUIT_ICONS[clearing.suit]}</span>
                 <ClearingId>#{clearing.id.toUpperCase()}</ClearingId>
                 <SlotsLabel>{clearing.buildingSlots} slots</SlotsLabel>
@@ -156,16 +186,16 @@ export const GameBoard = ({ definition, state }: GameBoardProps) => {
               <BadgeRow>
                 {warriors.map(([faction, amount]) => (
                   <Badge key={`${clearing.id}_${faction}`} color={FACTION_COLORS[faction as FactionId]}>
-                    {amount} {formatFaction(faction as FactionId)}
+                    ⚔ {amount} {formatFaction(faction as FactionId)}
                   </Badge>
                 ))}
                 {clearingState?.buildings.map(building => (
-                  <Badge key={building.id} color="#3d3127">
-                    {formatBuilding(building.type)}
+                  <Badge key={building.id} color={FACTION_COLORS[building.faction]}>
+                    🏛 {formatBuilding(building.type)}
                   </Badge>
                 ))}
                 {clearingState?.tokens.map(token => (
-                  <Badge key={token.id} color="#8c6b3d">
+                  <Badge key={token.id} color={FACTION_COLORS[token.faction]}>
                     {formatToken(token.type)}
                   </Badge>
                 ))}
@@ -190,27 +220,27 @@ export const GameBoard = ({ definition, state }: GameBoardProps) => {
 }
 
 const formatFaction = (faction: FactionId) => {
-  if (faction === 'marquise') return 'Cats'
-  if (faction === 'eyrie') return 'Eyrie'
-  return 'Alliance'
+  if (faction === 'marquise') return 'Cat'
+  if (faction === 'eyrie') return 'Bird'
+  return 'WA'
 }
 
 const formatBuilding = (type: BuildingInstance['type']) => {
   switch (type) {
     case 'sawmill':
-      return 'Sawmill'
+      return 'Mill'
     case 'workshop':
-      return 'Workshop'
+      return 'Shop'
     case 'recruiter':
       return 'Recruiter'
     case 'roost':
       return 'Roost'
     case 'base_mouse':
-      return 'Mouse Base'
+      return 'Base'
     case 'base_rabbit':
-      return 'Rabbit Base'
+      return 'Base'
     case 'base_fox':
-      return 'Fox Base'
+      return 'Base'
     case 'keep':
       return 'Keep'
     default:
@@ -219,8 +249,8 @@ const formatBuilding = (type: BuildingInstance['type']) => {
 }
 
 const formatToken = (type: TokenType) => {
-  if (type === 'wood') return 'Wood'
-  if (type === 'sympathy') return 'Sympathy'
+  if (type === 'wood') return '🪵 Wood'
+  if (type === 'sympathy') return '✊ Sympathy'
   return 'Token'
 }
 
@@ -284,22 +314,49 @@ const ClearingCircle = styled.div<{ suit: Suit }>`
     box-shadow: 0 12px 24px rgba(0, 0, 0, 0.25);
     text-align: center;
     padding: 12px;
+    transition: all 0.2s ease;
 
     span {
-      font-size: 28px;
+      font-size: 32px;
       line-height: 1;
+    }
+    
+    &[data-selectable="true"] {
+      animation: pulse 1.5s ease-in-out infinite;
+      border-color: #ff6b35;
+      border-width: 5px;
+    }
+    
+    &[data-selected="true"] {
+      border-color: #ff6b35;
+      border-width: 6px;
+      box-shadow: 0 0 20px rgba(255, 107, 53, 0.8), 0 12px 24px rgba(0, 0, 0, 0.25);
+      animation: none;
+    }
+    
+    @keyframes pulse {
+      0%, 100% {
+        box-shadow: 0 0 10px rgba(255, 107, 53, 0.5), 0 12px 24px rgba(0, 0, 0, 0.25);
+      }
+      50% {
+        box-shadow: 0 0 20px rgba(217, 106, 61, 0.8), 0 12px 24px rgba(0, 0, 0, 0.25);
+      }
     }
   `}
 `
 
 const ClearingId = styled.div`
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.08em;
-  opacity: 0.8;
+  opacity: 0.7;
+  font-weight: 600;
+  color: #34495e;
 `
 
 const SlotsLabel = styled.div`
-  font-size: 11px;
+  font-size: 10px;
+  opacity: 0.6;
+  color: #7f8c8d;
 `
 
 const BadgeRow = styled.div`
@@ -313,13 +370,14 @@ const Badge = styled.div<{ color: string }>`
   ${({ color }) => css`
     background: ${color};
     color: white;
-    border-radius: 999px;
-    padding: 2px 10px;
+    border-radius: 6px;
+    padding: 4px 10px;
     font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
     white-space: nowrap;
+    text-transform: uppercase;
   `}
 `
 

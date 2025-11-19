@@ -6,13 +6,14 @@ import { SCENARIOS } from '@/constants/scenarios'
 import { WOODLAND_BOARD_DEFINITION } from '@/gameState/boardDefinition'
 import { summarizeGameState } from '@/gameState/actions'
 import { getNextFaction, getNextPhase, getScenarioGameState } from '@/gameState/scenarioState'
-import { DecreeColumn, FactionId, GameState } from '@/gameState/schema'
+import { DecreeColumn, FactionId, GameState, MARQUISE_BUILDING_TRACKS } from '@/gameState/schema'
 import { useMultiPartyChat } from '@/hooks/useMultiPartyChat_realtime'
 import { TUTOR_SYSTEM_PROMPT } from '@/prompts/tutor'
 import { useChatCompleteMutation } from '@/redux/api/common'
 import { ThemeProvider, css } from '@emotion/react'
 import styled from '@emotion/styled'
 import { DEFAULT_LIGHT_THEME } from '@wookiejin/react-component'
+import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatCompletionParams } from '../api/chatComplete/route'
@@ -25,8 +26,8 @@ const DIFFICULTY_LABELS = ['Easy', 'Medium', 'Hard'] as const
 
 const FACTION_META: Record<FactionId, { label: string; color: string }> = {
   marquise: { label: 'Marquise de Cat', color: '#d96a3d' },
-  eyrie: { label: 'Eyrie Dynasties', color: '#2f5faf' },
-  woodland_alliance: { label: 'Woodland Alliance', color: '#2f8c5b' },
+  eyrie: { label: 'Eyrie Dynasties', color: '#4a90e2' },
+  woodland_alliance: { label: 'Woodland Alliance', color: '#27ae60' },
 }
 
 const VICTORY_TARGET = 30
@@ -68,6 +69,26 @@ export default function Home() {
       }),
     [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation],
   )
+
+  // March action state
+  const [isMarchMode, setIsMarchMode] = useState(false)
+  const [marchFromClearing, setMarchFromClearing] = useState<string | null>(null)
+  const [marchToClearing, setMarchToClearing] = useState<string | null>(null)
+  const [marchWarriorCount, setMarchWarriorCount] = useState(1)
+
+  // Battle action state
+  const [isBattleMode, setIsBattleMode] = useState(false)
+  const [battleClearing, setBattleClearing] = useState<string | null>(null)
+  const [battleDefender, setBattleDefender] = useState<FactionId | null>(null)
+
+  // Build action state
+  const [buildMode, setBuildMode] = useState<'sawmill' | 'workshop' | 'recruiter' | null>(null)
+  const [buildClearing, setBuildClearing] = useState<string | null>(null)
+
+  // Recruit action state
+  const [isRecruitMode, setIsRecruitMode] = useState(false)
+  const [recruitClearing, setRecruitClearing] = useState<string | null>(null)
+  const [recruitWarriorCount, setRecruitWarriorCount] = useState(1)
 
   const tutorChat = useCallback(async () => {
     if (loadingTutorResponse) return
@@ -149,6 +170,522 @@ export default function Home() {
     setGameState(getScenarioGameState(scenarioIndex))
     setLastPlayerAction(`Reset to ${scenario.title}.`)
   }, [scenarioIndex, scenario.title])
+
+  // March action handlers
+  const toggleMarch = useCallback(() => {
+    if (isMarchMode) {
+      // Turn off march mode
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+    } else {
+      // Turn on march mode, turn off other modes
+      setIsMarchMode(true)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setBuildMode(null)
+      setBuildClearing(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [isMarchMode])
+
+  const cancelMarch = useCallback(() => {
+    setIsMarchMode(false)
+    setMarchFromClearing(null)
+    setMarchToClearing(null)
+    setMarchWarriorCount(1)
+  }, [])
+
+  const handleClearingClick = useCallback((clearingId: string) => {
+    if (!isMarchMode) return
+
+    if (!marchFromClearing) {
+      // First click - select source clearing
+      setMarchFromClearing(clearingId)
+      setMarchWarriorCount(1)
+    } else if (!marchToClearing) {
+      // Second click - select destination clearing
+      if (clearingId === marchFromClearing) {
+        // Clicked same clearing - deselect
+        setMarchFromClearing(null)
+      } else {
+        setMarchToClearing(clearingId)
+      }
+    }
+  }, [isMarchMode, marchFromClearing, marchToClearing])
+
+  const executeMarch = useCallback(async () => {
+    if (!marchFromClearing || !marchToClearing) return
+
+    try {
+      const response = await fetch('/api/game/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: gameState,
+          faction: 'marquise',
+          from: marchFromClearing,
+          to: marchToClearing,
+          warriors: marchWarriorCount,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        alert(error.error || 'Failed to execute march')
+        return
+      }
+
+      const data = await response.json()
+      setGameState(data.state)
+      cancelMarch()
+    } catch (error) {
+      console.error('March error:', error)
+      alert('Failed to execute march')
+    }
+  }, [marchFromClearing, marchToClearing, marchWarriorCount, gameState, cancelMarch])
+
+  // Get valid clearings for march selection
+  const validFromClearings = useMemo(() => {
+    if (!isMarchMode || marchFromClearing) return []
+    
+    return Object.entries(gameState.board.clearings)
+      .filter(([, clearing]) => (clearing.warriors.marquise ?? 0) > 0)
+      .map(([id]) => id)
+  }, [isMarchMode, marchFromClearing, gameState.board.clearings])
+
+  const validToClearings = useMemo(() => {
+    if (!isMarchMode || !marchFromClearing || marchToClearing) return []
+    
+    const fromClearing = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === marchFromClearing)
+    if (!fromClearing) return []
+    
+    return fromClearing.adjacentClearings
+  }, [isMarchMode, marchFromClearing, marchToClearing])
+
+  const maxWarriors = useMemo(() => {
+    if (!marchFromClearing) return 0
+    return gameState.board.clearings[marchFromClearing]?.warriors.marquise ?? 0
+  }, [marchFromClearing, gameState.board.clearings])
+
+  // Battle action handlers
+  const toggleBattle = useCallback(() => {
+    if (isBattleMode) {
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+    } else {
+      // Turn on battle mode, turn off other modes
+      setIsBattleMode(true)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setBuildMode(null)
+      setBuildClearing(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [isBattleMode])
+
+  const cancelBattle = useCallback(() => {
+    setIsBattleMode(false)
+    setBattleClearing(null)
+    setBattleDefender(null)
+  }, [])
+
+  const handleBattleClearingClick = useCallback((clearingId: string) => {
+    if (!isBattleMode) return
+    setBattleClearing(clearingId)
+    setBattleDefender(null)
+  }, [isBattleMode])
+
+  const executeBattle = useCallback(async () => {
+    if (!battleClearing || !battleDefender) return
+
+    try {
+      const response = await fetch('/api/game/battle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: gameState,
+          clearingId: battleClearing,
+          attacker: 'marquise',
+          defender: battleDefender,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        alert(error.error || 'Failed to execute battle')
+        return
+      }
+
+      const data = await response.json()
+      setGameState(data.state)
+      
+      // Show detailed battle results
+      const attackerName = 'Marquise de Cat'
+      const defenderName = FACTION_META[battleDefender].label
+      
+      let resultMessage = `🗡️ Battle Results in Clearing #${battleClearing.toUpperCase()}\n\n`
+      
+      // Dice rolls
+      resultMessage += `📊 Dice Rolls:\n`
+      resultMessage += `Attacker (${attackerName}): ${data.dice[0]}\n`
+      resultMessage += `Defender (${defenderName}): ${data.dice[1]}\n\n`
+      
+      // Hits breakdown
+      resultMessage += `💥 Hits Dealt:\n`
+      resultMessage += `${attackerName}: ${data.attackerHits} total`
+      if (data.attackerExtraHits > 0) {
+        resultMessage += ` (${data.attackerRolledHits} rolled + ${data.attackerExtraHits} extra)`
+      }
+      resultMessage += `\n`
+      resultMessage += `${defenderName}: ${data.defenderHits} total`
+      if (data.defenderExtraHits > 0) {
+        resultMessage += ` (${data.defenderRolledHits} rolled + ${data.defenderExtraHits} extra)`
+      }
+      resultMessage += `\n\n`
+      
+      // Casualties
+      resultMessage += `☠️ Casualties:\n`
+      resultMessage += `${defenderName} lost:\n`
+      if (data.defenderWarriorsRemoved > 0) {
+        resultMessage += `  - ${data.defenderWarriorsRemoved} warrior(s)\n`
+      }
+      if (data.defenderBuildingsRemoved.length > 0) {
+        resultMessage += `  - ${data.defenderBuildingsRemoved.length} building(s)\n`
+      }
+      if (data.defenderTokensRemoved.length > 0) {
+        resultMessage += `  - ${data.defenderTokensRemoved.length} token(s)\n`
+      }
+      
+      resultMessage += `${attackerName} lost:\n`
+      if (data.attackerWarriorsRemoved > 0) {
+        resultMessage += `  - ${data.attackerWarriorsRemoved} warrior(s)\n`
+      }
+      if (data.attackerBuildingsRemoved.length > 0) {
+        resultMessage += `  - ${data.attackerBuildingsRemoved.length} building(s)\n`
+      }
+      if (data.attackerTokensRemoved.length > 0) {
+        resultMessage += `  - ${data.attackerTokensRemoved.length} token(s)\n`
+      }
+      
+      // Victory points
+      if (data.victoryPointsEarned.attacker > 0 || data.victoryPointsEarned.defender > 0) {
+        resultMessage += `\n⭐ Victory Points Earned:\n`
+        if (data.victoryPointsEarned.attacker > 0) {
+          resultMessage += `${attackerName}: +${data.victoryPointsEarned.attacker} VP\n`
+        }
+        if (data.victoryPointsEarned.defender > 0) {
+          resultMessage += `${defenderName}: +${data.victoryPointsEarned.defender} VP\n`
+        }
+      }
+      
+      alert(resultMessage)
+      
+      cancelBattle()
+    } catch (error) {
+      console.error('Battle error:', error)
+      alert('Failed to execute battle')
+    }
+  }, [battleClearing, battleDefender, gameState, cancelBattle])
+
+  // Get valid clearings for battle selection
+  const validBattleClearings = useMemo(() => {
+    if (!isBattleMode || battleClearing) return []
+    
+    return Object.entries(gameState.board.clearings)
+      .filter(([, clearing]) => {
+        const marquiseWarriors = clearing.warriors.marquise ?? 0
+        // Check if there are any enemy pieces (warriors, buildings, or tokens)
+        const hasEnemyPieces = Object.entries(clearing.warriors)
+          .some(([faction]) => faction !== 'marquise') ||
+          clearing.buildings.some(b => b.faction !== 'marquise') ||
+          clearing.tokens.some(t => t.faction !== 'marquise')
+        return marquiseWarriors > 0 && hasEnemyPieces
+      })
+      .map(([id]) => id)
+  }, [isBattleMode, battleClearing, gameState.board.clearings])
+
+  // Get available defenders in selected clearing
+  const availableDefenders = useMemo(() => {
+    if (!battleClearing) return []
+    
+    const clearing = gameState.board.clearings[battleClearing]
+    if (!clearing) return []
+    
+    // Get all factions with any pieces in the clearing (warriors, buildings, or tokens)
+    const factionsWithPieces = new Set<FactionId>()
+    
+    Object.entries(clearing.warriors).forEach(([faction]) => {
+      if (faction !== 'marquise') {
+        factionsWithPieces.add(faction as FactionId)
+      }
+    })
+    
+    clearing.buildings.forEach(building => {
+      if (building.faction !== 'marquise') {
+        factionsWithPieces.add(building.faction)
+      }
+    })
+    
+    clearing.tokens.forEach(token => {
+      if (token.faction !== 'marquise') {
+        factionsWithPieces.add(token.faction)
+      }
+    })
+    
+    return Array.from(factionsWithPieces)
+  }, [battleClearing, gameState.board.clearings])
+
+  // Build action handlers
+  const toggleBuildSawmill = useCallback(() => {
+    if (buildMode === 'sawmill') {
+      setBuildMode(null)
+      setBuildClearing(null)
+    } else {
+      // Turn on sawmill build mode, turn off other modes
+      setBuildMode('sawmill')
+      setBuildClearing(null)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [buildMode])
+
+  const toggleBuildWorkshop = useCallback(() => {
+    if (buildMode === 'workshop') {
+      setBuildMode(null)
+      setBuildClearing(null)
+    } else {
+      // Turn on workshop build mode, turn off other modes
+      setBuildMode('workshop')
+      setBuildClearing(null)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [buildMode])
+
+  const toggleBuildRecruiter = useCallback(() => {
+    if (buildMode === 'recruiter') {
+      setBuildMode(null)
+      setBuildClearing(null)
+    } else {
+      // Turn on recruiter build mode, turn off other modes
+      setBuildMode('recruiter')
+      setBuildClearing(null)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [buildMode])
+
+  const cancelBuild = useCallback(() => {
+    setBuildMode(null)
+    setBuildClearing(null)
+  }, [])
+
+  const handleBuildClearingClick = useCallback((clearingId: string) => {
+    if (!buildMode) return
+    setBuildClearing(clearingId)
+  }, [buildMode])
+
+  const executeBuild = useCallback(async () => {
+    if (!buildMode || !buildClearing) return
+
+    try {
+      const response = await fetch('/api/game/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: gameState,
+          faction: 'marquise',
+          clearingId: buildClearing,
+          buildingType: buildMode,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        alert(error.error || 'Failed to build')
+        return
+      }
+
+      const data = await response.json()
+      setGameState(data.state)
+      
+      // Calculate VP earned
+      const track = gameState.factions.marquise.buildingTracks[buildMode]
+      const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
+      const vpEarned = trackDef.steps[track.builtCount].victoryPoints
+      const woodCost = trackDef.steps[track.builtCount].costWood
+      
+      alert(
+        `🏛️ Successfully built ${buildMode} in clearing #${buildClearing.toUpperCase()}\n\n` +
+        `Wood spent: ${woodCost}\n` +
+        `Victory Points earned: ${vpEarned}\n` +
+        `New VP total: ${data.state.victoryTrack.marquise}`
+      )
+      
+      cancelBuild()
+    } catch (error) {
+      console.error('Build error:', error)
+      alert('Failed to build')
+    }
+  }, [buildMode, buildClearing, gameState, cancelBuild])
+
+  // Get valid clearings for building
+  const validBuildClearings = useMemo(() => {
+    if (!buildMode || buildClearing) return []
+    
+    return Object.entries(gameState.board.clearings)
+      .filter(([clearingId, clearing]) => {
+        const marquiseWarriors = clearing.warriors.marquise ?? 0
+        if (marquiseWarriors === 0) return false
+        
+        // Check if clearing has available building slots
+        const clearingDef = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === clearingId)
+        if (!clearingDef) return false
+        
+        return clearing.buildings.length < clearingDef.buildingSlots
+      })
+      .map(([id]) => id)
+  }, [buildMode, buildClearing, gameState.board.clearings])
+
+  // Recruit action handlers
+  const toggleRecruit = useCallback(() => {
+    if (isRecruitMode) {
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    } else {
+      // Turn on recruit mode, turn off other modes
+      setIsRecruitMode(true)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setBuildMode(null)
+      setBuildClearing(null)
+    }
+  }, [isRecruitMode])
+
+  const cancelRecruit = useCallback(() => {
+    setIsRecruitMode(false)
+    setRecruitClearing(null)
+    setRecruitWarriorCount(1)
+  }, [])
+
+  const handleRecruitClearingClick = useCallback((clearingId: string) => {
+    if (!isRecruitMode) return
+    setRecruitClearing(clearingId)
+    setRecruitWarriorCount(1)
+  }, [isRecruitMode])
+
+  const executeRecruit = useCallback(async () => {
+    if (!recruitClearing) return
+
+    try {
+      const response = await fetch('/api/game/recruit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: gameState,
+          faction: 'marquise',
+          clearingId: recruitClearing,
+          warriors: recruitWarriorCount,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        alert(error.error || 'Failed to recruit')
+        return
+      }
+
+      const data = await response.json()
+      setGameState(data.state)
+      
+      alert(
+        `⚔️ Successfully recruited ${recruitWarriorCount} warrior(s) in clearing #${recruitClearing.toUpperCase()}\n\n` +
+        `Warriors in supply: ${data.state.factions.marquise.warriorsInSupply}`
+      )
+      
+      cancelRecruit()
+    } catch (error) {
+      console.error('Recruit error:', error)
+      alert('Failed to recruit')
+    }
+  }, [recruitClearing, recruitWarriorCount, gameState, cancelRecruit])
+
+  // Get valid clearings for recruiting
+  const validRecruitClearings = useMemo(() => {
+    if (!isRecruitMode || recruitClearing) return []
+    
+    return Object.entries(gameState.board.clearings)
+      .filter(([, clearing]) => {
+        // Must have recruiters in the clearing
+        const recruitersInClearing = clearing.buildings.filter(
+          b => b.faction === 'marquise' && b.type === 'recruiter'
+        ).length
+        return recruitersInClearing > 0
+      })
+      .map(([id]) => id)
+  }, [isRecruitMode, recruitClearing, gameState.board.clearings])
+
+  // Get max warriors that can be recruited in selected clearing
+  const maxRecruitWarriors = useMemo(() => {
+    if (!recruitClearing) return 0
+    
+    const clearing = gameState.board.clearings[recruitClearing]
+    if (!clearing) return 0
+    
+    const recruitersInClearing = clearing.buildings.filter(
+      b => b.faction === 'marquise' && b.type === 'recruiter'
+    ).length
+    
+    // Can recruit up to the number of recruiters, but limited by supply
+    return Math.min(recruitersInClearing, gameState.factions.marquise.warriorsInSupply)
+  }, [recruitClearing, gameState.board.clearings, gameState.factions.marquise.warriorsInSupply])
 
   const logistics = useMemo(() => {
     const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
@@ -235,9 +772,273 @@ export default function Home() {
               </ProfileList>
             </ScenarioHeader>
             <GameBoardWrapper>
-              <GameBoard definition={WOODLAND_BOARD_DEFINITION} state={gameState} />
+              <GameBoard
+                definition={WOODLAND_BOARD_DEFINITION}
+                state={gameState}
+                selectableClearings={
+                  isMarchMode 
+                    ? [...validFromClearings, ...validToClearings] 
+                    : isBattleMode 
+                    ? validBattleClearings 
+                    : buildMode
+                    ? validBuildClearings
+                    : isRecruitMode
+                    ? validRecruitClearings
+                    : []
+                }
+                selectedClearing={
+                  marchFromClearing || marchToClearing || battleClearing || buildClearing || recruitClearing || undefined
+                }
+                onClearingClick={
+                  isMarchMode 
+                    ? handleClearingClick 
+                    : isBattleMode 
+                    ? handleBattleClearingClick 
+                    : buildMode
+                    ? handleBuildClearingClick
+                    : isRecruitMode
+                    ? handleRecruitClearingClick
+                    : () => {}
+                }
+              />
             </GameBoardWrapper>
             <HudGrid>
+              <HudPanel>
+                <HudTitle>
+                  <Image src="/image/cat.png" alt="Marquise de Cat" width={24} height={24} />Actions
+                </HudTitle>
+                {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
+                  <ActionSection>
+                    <PhaseLabel>Birdsong</PhaseLabel>
+                    <ActionGrid>
+                      <ActionButton disabled>Place Wood</ActionButton>
+                      <ActionButton disabled>Craft Card</ActionButton>
+                    </ActionGrid>
+                  </ActionSection>
+                )}
+                {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'daylight' && (
+                  <ActionSection>
+                    <PhaseLabel>Daylight</PhaseLabel>
+                    <ActionGrid>
+                      <ActionButton onClick={toggleBattle}>
+                        {isBattleMode ? 'Cancel Battle' : 'Battle'}
+                      </ActionButton>
+                      <ActionButton onClick={toggleMarch}>
+                        {isMarchMode ? 'Cancel March' : 'March'}
+                      </ActionButton>
+                      <ActionButton onClick={toggleRecruit}>
+                        {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
+                      </ActionButton>
+                      <ActionButton onClick={toggleBuildSawmill}>
+                        {buildMode === 'sawmill' ? 'Cancel Build' : 'Build Sawmill'}
+                      </ActionButton>
+                      <ActionButton onClick={toggleBuildWorkshop}>
+                        {buildMode === 'workshop' ? 'Cancel Build' : 'Build Workshop'}
+                      </ActionButton>
+                      <ActionButton onClick={toggleBuildRecruiter}>
+                        {buildMode === 'recruiter' ? 'Cancel Build' : 'Build Recruiter'}
+                      </ActionButton>
+                      {/* <ActionButton disabled>Overwork</ActionButton> */}
+                    </ActionGrid>
+                  </ActionSection>
+                )}
+                {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'evening' && (
+                  <ActionSection>
+                    <PhaseLabel>Evening</PhaseLabel>
+                    <ActionGrid>
+                      <ActionButton disabled>Draw & Discard</ActionButton>
+                      <ActionButton disabled>Score Points</ActionButton>
+                    </ActionGrid>
+                  </ActionSection>
+                )}
+                {isMarchMode && (
+                  <MarchPanel>
+                    <MarchTitle>March Action</MarchTitle>
+                    {!marchFromClearing && (
+                      <MarchInstruction>Select a clearing with Marquise warriors</MarchInstruction>
+                    )}
+                    {marchFromClearing && !marchToClearing && (
+                      <MarchInstruction>
+                        From: <strong>#{marchFromClearing.toUpperCase()}</strong> → Select adjacent destination
+                      </MarchInstruction>
+                    )}
+                    {marchFromClearing && marchToClearing && (
+                      <>
+                        <MarchInstruction>
+                          From: <strong>#{marchFromClearing.toUpperCase()}</strong> → To:{' '}
+                          <strong>#{marchToClearing.toUpperCase()}</strong>
+                        </MarchInstruction>
+                        <WarriorSelector>
+                          <label>Warriors to move:</label>
+                          <input
+                            type="range"
+                            min="1"
+                            max={maxWarriors}
+                            value={marchWarriorCount}
+                            onChange={e => setMarchWarriorCount(Number(e.target.value))}
+                          />
+                          <WarriorCount>
+                            {marchWarriorCount} / {maxWarriors}
+                          </WarriorCount>
+                        </WarriorSelector>
+                        <MarchButtonRow>
+                          <ActionButton onClick={executeMarch}>Execute March</ActionButton>
+                          <ActionButton onClick={cancelMarch}>Cancel</ActionButton>
+                        </MarchButtonRow>
+                      </>
+                    )}
+                    {marchFromClearing && !marchToClearing && (
+                      <MarchButtonRow>
+                        <ActionButton onClick={cancelMarch}>Cancel</ActionButton>
+                      </MarchButtonRow>
+                    )}
+                  </MarchPanel>
+                )}
+                {isBattleMode && (
+                  <MarchPanel>
+                    <MarchTitle>Battle Action</MarchTitle>
+                    {!battleClearing && (
+                      <MarchInstruction>Select a clearing with enemies to battle</MarchInstruction>
+                    )}
+                    {battleClearing && !battleDefender && (
+                      <>
+                        <MarchInstruction>
+                          Clearing: <strong>#{battleClearing.toUpperCase()}</strong> → Select defender
+                        </MarchInstruction>
+                        <DefenderSelector>
+                          {availableDefenders.map(faction => (
+                            <DefenderButton
+                              key={faction}
+                              onClick={() => setBattleDefender(faction)}
+                              selected={battleDefender === faction}
+                            >
+                              {FACTION_META[faction].label}
+                            </DefenderButton>
+                          ))}
+                        </DefenderSelector>
+                      </>
+                    )}
+                    {battleClearing && battleDefender && (
+                      <>
+                        <MarchInstruction>
+                          Battle in <strong>#{battleClearing.toUpperCase()}</strong>
+                          <br />
+                          Attacker: <strong>Marquise de Cat</strong>
+                          <br />
+                          Defender: <strong>{FACTION_META[battleDefender].label}</strong>
+                        </MarchInstruction>
+                        <MarchButtonRow>
+                          <ActionButton onClick={executeBattle}>Execute Battle</ActionButton>
+                          <ActionButton onClick={cancelBattle}>Cancel</ActionButton>
+                        </MarchButtonRow>
+                      </>
+                    )}
+                    {battleClearing && !battleDefender && (
+                      <MarchButtonRow>
+                        <ActionButton onClick={cancelBattle}>Cancel</ActionButton>
+                      </MarchButtonRow>
+                    )}
+                  </MarchPanel>
+                )}
+                {buildMode && (
+                  <MarchPanel>
+                    <MarchTitle>Build {buildMode.charAt(0).toUpperCase() + buildMode.slice(1)}</MarchTitle>
+                    {!buildClearing && (
+                      <>
+                        <MarchInstruction>
+                          Select a clearing with Marquise warriors and available building slots
+                        </MarchInstruction>
+                        <MarchInstruction>
+                          Wood cost: <strong>{(() => {
+                            const track = gameState.factions.marquise.buildingTracks[buildMode]
+                            const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
+                            if (track.builtCount >= trackDef.steps.length) return 'MAX'
+                            return trackDef.steps[track.builtCount].costWood
+                          })()}</strong>
+                          {' · '}
+                          Wood available: <strong>{gameState.factions.marquise.woodInSupply}</strong>
+                        </MarchInstruction>
+                        <MarchInstruction>
+                          Buildings built: <strong>{gameState.factions.marquise.buildingTracks[buildMode].builtCount} / 6</strong>
+                        </MarchInstruction>
+                      </>
+                    )}
+                    {buildClearing && (
+                      <>
+                        <MarchInstruction>
+                          Build {buildMode} in <strong>#{buildClearing.toUpperCase()}</strong>
+                        </MarchInstruction>
+                        <MarchButtonRow>
+                          <ActionButton onClick={executeBuild}>Execute Build</ActionButton>
+                          <ActionButton onClick={cancelBuild}>Cancel</ActionButton>
+                        </MarchButtonRow>
+                      </>
+                    )}
+                    {!buildClearing && (
+                      <MarchButtonRow>
+                        <ActionButton onClick={cancelBuild}>Cancel</ActionButton>
+                      </MarchButtonRow>
+                    )}
+                  </MarchPanel>
+                )}
+                {isRecruitMode && (
+                  <MarchPanel>
+                    <MarchTitle>Recruit Warriors</MarchTitle>
+                    {!recruitClearing && (
+                      <>
+                        <MarchInstruction>
+                          Select a clearing with Marquise recruiters
+                        </MarchInstruction>
+                        <MarchInstruction>
+                          Warriors in supply: <strong>{gameState.factions.marquise.warriorsInSupply}</strong>
+                        </MarchInstruction>
+                      </>
+                    )}
+                    {recruitClearing && (
+                      <>
+                        <MarchInstruction>
+                          Recruit in <strong>#{recruitClearing.toUpperCase()}</strong>
+                        </MarchInstruction>
+                        <MarchInstruction>
+                          Recruiters in clearing: <strong>{(() => {
+                            const clearing = gameState.board.clearings[recruitClearing]
+                            return clearing.buildings.filter(
+                              b => b.faction === 'marquise' && b.type === 'recruiter'
+                            ).length
+                          })()}</strong>
+                        </MarchInstruction>
+                        <WarriorSelector>
+                          <label>Warriors to recruit:</label>
+                          <input
+                            type="range"
+                            min="1"
+                            max={maxRecruitWarriors}
+                            value={recruitWarriorCount}
+                            onChange={e => setRecruitWarriorCount(Number(e.target.value))}
+                          />
+                          <WarriorCount>
+                            {recruitWarriorCount} / {maxRecruitWarriors}
+                          </WarriorCount>
+                        </WarriorSelector>
+                        <MarchButtonRow>
+                          <ActionButton onClick={executeRecruit}>Execute Recruit</ActionButton>
+                          <ActionButton onClick={cancelRecruit}>Cancel</ActionButton>
+                        </MarchButtonRow>
+                      </>
+                    )}
+                    {!recruitClearing && (
+                      <MarchButtonRow>
+                        <ActionButton onClick={cancelRecruit}>Cancel</ActionButton>
+                      </MarchButtonRow>
+                    )}
+                  </MarchPanel>
+                )}
+                {gameState.turn.currentFaction !== 'marquise' && (
+                  <ActionSection>
+                    <DisabledMessage>Wait for Marquise de Cat's turn</DisabledMessage>
+                  </ActionSection>
+                )}
+              </HudPanel>
               <HudPanel>
                 <HudTitle>Turn Summary</HudTitle>
                 <TurnMeta>
@@ -461,6 +1262,9 @@ const HudTitle = styled.h3`
   margin: 0 0 12px;
   font-size: 16px;
   color: #2a170c;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 `
 
 const TurnMeta = styled.div`
@@ -493,12 +1297,17 @@ const ActionButton = styled.button`
   background: #3d2a18;
   color: white;
   padding: 6px 14px;
+  min-height: 32px;
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
   font-size: 11px;
   cursor: pointer;
   transition: opacity 120ms ease, transform 120ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
 
   :hover {
     opacity: 0.9;
@@ -561,4 +1370,120 @@ const LogisticsTags = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+`
+
+const ActionSection = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+`
+
+const PhaseLabel = styled.div`
+  font-size: 14px;
+  font-weight: 700;
+  color: #d96a3d;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+`
+
+const ActionGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
+`
+
+const DisabledMessage = styled.div`
+  font-size: 13px;
+  color: #6a5340;
+  text-align: center;
+  padding: 16px;
+  font-style: italic;
+`
+
+const MarchPanel = styled.div`
+  background: rgba(217, 106, 61, 0.1);
+  border: 2px solid #d96a3d;
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 8px;
+`
+
+const MarchTitle = styled.div`
+  font-size: 14px;
+  font-weight: 700;
+  color: #d96a3d;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+`
+
+const MarchInstruction = styled.div`
+  font-size: 13px;
+  color: #3d2a18;
+  margin-bottom: 10px;
+  
+  strong {
+    color: #d96a3d;
+    font-weight: 700;
+  }
+`
+
+const WarriorSelector = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  
+  label {
+    font-size: 12px;
+    color: #3d2a18;
+    font-weight: 600;
+  }
+  
+  input[type="range"] {
+    width: 100%;
+    accent-color: #d96a3d;
+  }
+`
+
+const WarriorCount = styled.div`
+  font-size: 14px;
+  font-weight: 700;
+  color: #d96a3d;
+  text-align: center;
+`
+
+const MarchButtonRow = styled.div`
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+`
+
+const DefenderSelector = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+`
+
+const DefenderButton = styled.button<{ selected: boolean }>`
+  border: 2px solid ${({ selected }) => (selected ? '#d96a3d' : '#d0b084')};
+  border-radius: 8px;
+  background: ${({ selected }) => (selected ? 'rgba(217, 106, 61, 0.2)' : 'rgba(255, 255, 255, 0.9)')};
+  color: #3d2a18;
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  :hover {
+    border-color: #d96a3d;
+    background: rgba(217, 106, 61, 0.15);
+  }
+
+  :active {
+    transform: translateY(1px);
+  }
 `
