@@ -1,7 +1,130 @@
-// high-level, generic tutor prompt, should update when the board is available
-export const TUTOR_SYSTEM_PROMPT = () =>
+import { MultiPartyChat } from '@/app/learn/page'
+import { PlayerProfile } from '@/constants/scenarios'
+import { GameInfoSummary } from '@/gameState/actions'
+import { FactionId } from '@/gameState/schema'
+
+type TutorPromptArgs = {
+  profile: PlayerProfile
+  boardState: GameInfoSummary
+  playerAction?: string
+  socialConversation: MultiPartyChat
+}
+
+const FACTION_LABELS: Record<FactionId, string> = {
+  marquise: 'Marquise de Cat',
+  eyrie: 'Eyrie Dynasties',
+  woodland_alliance: 'Woodland Alliance',
+}
+
+const toLabel = (value: string) =>
+  value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase())
+
+const formatResources = (resources: GameInfoSummary['factionSupplies'][number]['resources']) => {
+  const entries = Object.entries(resources)
+  if (!entries.length) return 'No notable resources'
+  return entries.map(([key, value]) => `${toLabel(key)}: ${value}`).join(', ')
+}
+
+const formatWarriors = (warriors: GameInfoSummary['clearings'][number]['warriors']) => {
+  const entries = Object.entries(warriors ?? {})
+  if (!entries.length) return 'None'
+  return entries
+    .map(([faction, amount]) => `${amount} ${FACTION_LABELS[faction as FactionId]?.split(' ')[0] ?? toLabel(faction)}`)
+    .join(', ')
+}
+
+const formatPieces = (items: string[]) => {
+  if (!items.length) return 'None'
+  return items
+    .map(item => {
+      const [owner, detail] = item.split(':')
+      if (detail) {
+        return `${toLabel(owner)} ${toLabel(detail)}`
+      }
+      return toLabel(item)
+    })
+    .join(', ')
+}
+
+const formatBoardSummary = (summary: GameInfoSummary) => {
+  const supplyLines = summary.factionSupplies
+    .map(
+      supply =>
+        `- ${FACTION_LABELS[supply.faction]} · Warriors ${supply.warriors}, ${formatResources(supply.resources)}`,
+    )
+    .join('\n')
+
+  const hotspotLines =
+    summary.clearings
+      .filter(
+        clearing =>
+          Object.keys(clearing.warriors ?? {}).length || clearing.buildings.length || clearing.tokens.length,
+      )
+      .slice(0, 5)
+      .map(
+        clearing =>
+          `- ${clearing.id.toUpperCase()} (${toLabel(clearing.suit)}): Warriors ${formatWarriors(
+            clearing.warriors,
+          )} | Buildings ${formatPieces(clearing.buildings)} | Tokens ${formatPieces(clearing.tokens)}`,
+      )
+      .join('\n') || '- No contested clearings yet.'
+
+  return [
+    `Turn · ${FACTION_LABELS[summary.turn.currentFaction]} ${toLabel(summary.turn.phase)} (Round ${summary.turn.roundNumber})`,
+    `Victory · Cats ${summary.victoryTrack.marquise} | Eyrie ${summary.victoryTrack.eyrie} | Alliance ${summary.victoryTrack.woodland_alliance}`,
+    'Supplies:',
+    supplyLines,
+    'Key Clearings:',
+    hotspotLines,
+  ].join('\n')
+}
+
+const formatPlayerAction = (action?: string) =>
+  action && action.trim().length ? action : 'No player action recorded. Ask the learner what they plan to do.'
+
+const formatConversation = (conversation: MultiPartyChat) => {
+  const recent = conversation.filter(message => message.role !== 'system').slice(-6)
+  if (!recent.length) {
+    return '- No recent diplomacy between factions.'
+  }
+  return recent
+    .map(message => {
+      const speaker =
+        message.faction === 'cat'
+          ? 'Marquise'
+          : message.faction === 'eyrie'
+          ? 'Eyrie'
+          : message.faction === 'alliance'
+          ? 'Alliance'
+          : message.role === 'assistant'
+          ? 'Tutor'
+          : 'Cats'
+      return `- ${speaker}: ${message.content}`
+    })
+    .join('\n')
+}
+
+// high-level, generic tutor prompt, updated at runtime with board context
+export const TUTOR_SYSTEM_PROMPT = ({ profile, boardState, playerAction, socialConversation }: TutorPromptArgs) =>
   `
 You are a patient and experienced tutor helping an apprentice learn Root, an asymmetric strategy board game set in a woodland realm.
+
+## Live Scenario Context
+
+### Learner Profile
+- Proficiency Level: ${profile.proficiencyLevel}
+- Play Style: ${profile.playStyle}
+
+### Board State Snapshot
+${formatBoardSummary(boardState)}
+
+### Recent Player Action
+${formatPlayerAction(playerAction)}
+
+### Table Talk Highlights
+${formatConversation(socialConversation)}
 
 ## Your Role & Teaching Philosophy
 
@@ -119,7 +242,7 @@ The board consists of **clearings** connected to each other:
 - Discuss faction interactions and counter-strategies
 
 ### Scenario Context Awareness
-The player is currently in a learning scenario where they're playing as the Marquise de Cat, negotiating and strategizing with AI-controlled Eyrie and Alliance factions. While you don't have access to the exact board state yet, you can:
+The player is currently in a learning scenario where they're playing as the Marquise de Cat, negotiating and strategizing with AI-controlled Eyrie and Alliance factions. Use the live board summary and table-talk notes above to:
 - Discuss general Root strategy and tactics
 - Explain how faction interactions work
 - Help them understand diplomatic considerations

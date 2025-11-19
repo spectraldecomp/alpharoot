@@ -4,6 +4,7 @@ import { ChatViewer } from '@/components/chatViewer'
 import { GameBoard } from '@/components/gameBoard'
 import { SCENARIOS } from '@/constants/scenarios'
 import { WOODLAND_BOARD_DEFINITION } from '@/gameState/boardDefinition'
+import { summarizeGameState } from '@/gameState/actions'
 import { getNextFaction, getNextPhase, getScenarioGameState } from '@/gameState/scenarioState'
 import { DecreeColumn, FactionId, GameState } from '@/gameState/schema'
 import { useMultiPartyChat } from '@/hooks/useMultiPartyChat_realtime'
@@ -29,6 +30,8 @@ const FACTION_META: Record<FactionId, { label: string; color: string }> = {
 }
 
 const VICTORY_TARGET = 30
+const formatPhaseLabel = (phase: GameState['turn']['phase']) =>
+  phase.charAt(0).toUpperCase() + phase.slice(1)
 
 export default function Home() {
   const searchParams = useSearchParams()
@@ -38,10 +41,6 @@ export default function Home() {
     : Math.min(Math.max(scenarioIndexParam, 0), SCENARIOS.length - 1)
   const scenario = SCENARIOS[scenarioIndex]
   const [tutorChatComplete, { isLoading: loadingTutorResponse }] = useChatCompleteMutation()
-  const [tutorConversation, setTutorConversation] = useState<ChatCompletionParams['conversation']>([
-    { role: 'system', content: TUTOR_SYSTEM_PROMPT() },
-    { role: 'assistant', content: 'Hi apprentice, I’m the Wise Cat.' },
-  ])
   const {
     playerConversation,
     playerMessage,
@@ -52,22 +51,41 @@ export default function Home() {
   } = useMultiPartyChat(scenario)
   const [tutorMessage, setTutorMessage] = useState('')
   const [gameState, setGameState] = useState<GameState>(() => getScenarioGameState(scenarioIndex))
+  const [lastPlayerAction, setLastPlayerAction] = useState<string>(() => `Loaded ${scenario.title}.`)
   const tutorChatRef = useRef<HTMLDivElement>(null)
   const playerChatRef = useRef<HTMLDivElement>(null)
+  const [tutorConversation, setTutorConversation] = useState<ChatCompletionParams['conversation']>([
+    { role: 'assistant', content: 'Hi apprentice, I’m the Wise Cat.' },
+  ])
+  const boardSummary = useMemo(() => summarizeGameState(gameState), [gameState])
+  const tutorSystemPrompt = useMemo(
+    () =>
+      TUTOR_SYSTEM_PROMPT({
+        profile: scenario.playerProfile,
+        boardState: boardSummary,
+        playerAction: lastPlayerAction,
+        socialConversation: playerConversation,
+      }),
+    [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation],
+  )
 
   const tutorChat = useCallback(async () => {
-    if (!loadingTutorResponse) {
-      const newConversation = [...tutorConversation, { role: 'user' as const, content: tutorMessage }]
-      setTutorConversation(newConversation)
-      setTutorMessage('')
-      const response = await tutorChatComplete({ conversation: newConversation }).unwrap()
-      setTutorConversation(prev => [...prev, { role: 'assistant' as const, content: response.content }])
-    }
-  }, [loadingTutorResponse, tutorChatComplete, tutorConversation, tutorMessage])
+    if (loadingTutorResponse) return
+    const trimmedMessage = tutorMessage.trim()
+    if (!trimmedMessage) return
+    const newConversation = [...tutorConversation, { role: 'user' as const, content: trimmedMessage }]
+    setTutorConversation(newConversation)
+    setTutorMessage('')
+    const response = await tutorChatComplete({
+      conversation: [{ role: 'system', content: tutorSystemPrompt }, ...newConversation],
+    }).unwrap()
+    setTutorConversation(prev => [...prev, { role: 'assistant' as const, content: response.content }])
+  }, [loadingTutorResponse, tutorChatComplete, tutorConversation, tutorMessage, tutorSystemPrompt])
 
   useEffect(() => {
     setGameState(getScenarioGameState(scenarioIndex))
-  }, [scenarioIndex])
+    setLastPlayerAction(`Loaded ${scenario.title}.`)
+  }, [scenarioIndex, scenario.title])
 
   useEffect(() => {
     if (tutorConversation) {
@@ -84,10 +102,15 @@ export default function Home() {
   const cloneGameState = useCallback((value: GameState) => JSON.parse(JSON.stringify(value)) as GameState, [])
 
   const advancePhase = useCallback(() => {
+    let description = ''
     setGameState(prev => {
       const next = cloneGameState(prev)
+      const actingFaction = next.turn.currentFaction
       const previousPhase = next.turn.phase
       const newPhase = getNextPhase(previousPhase)
+      description = `Advanced ${FACTION_META[actingFaction].label} from ${formatPhaseLabel(
+        previousPhase,
+      )} to ${formatPhaseLabel(newPhase)}`
 
       if (previousPhase === 'evening') {
         const nextFaction = getNextFaction(next.turn.currentFaction)
@@ -101,25 +124,31 @@ export default function Home() {
       next.turn.actionSubstep = undefined
       return next
     })
+    setLastPlayerAction(description || 'Advanced phase')
   }, [cloneGameState])
 
   const advanceFaction = useCallback(() => {
+    let description = ''
     setGameState(prev => {
       const next = cloneGameState(prev)
-      const nextFaction = getNextFaction(next.turn.currentFaction)
+      const fromFaction = next.turn.currentFaction
+      const nextFaction = getNextFaction(fromFaction)
       if (nextFaction === 'marquise') {
         next.turn.roundNumber += 1
       }
       next.turn.currentFaction = nextFaction
       next.turn.phase = 'birdsong'
       next.turn.actionSubstep = undefined
+      description = `Passed turn from ${FACTION_META[fromFaction].label} to ${FACTION_META[nextFaction].label}`
       return next
     })
+    setLastPlayerAction(description || 'Passed turn')
   }, [cloneGameState])
 
   const resetGameState = useCallback(() => {
     setGameState(getScenarioGameState(scenarioIndex))
-  }, [scenarioIndex])
+    setLastPlayerAction(`Reset to ${scenario.title}.`)
+  }, [scenarioIndex, scenario.title])
 
   const logistics = useMemo(() => {
     const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
@@ -168,7 +197,11 @@ export default function Home() {
         <Container>
           <TutorChatSection>
             <ChatContainer ref={tutorChatRef}>
-              <ChatViewer conversation={tutorConversation} isReplying={loadingTutorResponse} />
+              <ChatViewer
+                conversation={tutorConversation}
+                isReplying={loadingTutorResponse}
+                typingAvatar="tutor"
+              />
             </ChatContainer>
             <ChatInput
               message={tutorMessage}

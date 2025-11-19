@@ -10,9 +10,17 @@ const PROFILE_SIZE = 40
 interface Props {
   conversation: { role: 'assistant' | 'user' | 'system'; content: string; faction?: string }[]
   isReplying?: boolean
+  typingAvatar?: string
 }
 
-export const ChatViewer = memo(function ChatViewer({ conversation, isReplying = false }: Props) {
+export const ChatViewer = memo(function ChatViewer({
+  conversation,
+  isReplying = false,
+  typingAvatar,
+}: Props) {
+  const typingImage =
+    typingAvatar ?? (conversation.length && conversation[0].role === 'system' ? 'tutor' : 'typing')
+
   return (
     <Container>
       {conversation.map((message, i) => {
@@ -57,13 +65,7 @@ export const ChatViewer = memo(function ChatViewer({ conversation, isReplying = 
       {isReplying && (
         <MessageRow>
           <Profile>
-            {conversation[0].role !== 'system' ? (
-              <>
-                <Image src={'/image/typing.png'} width={PROFILE_SIZE} height={PROFILE_SIZE} alt="" />
-              </>
-            ) : (
-              <Image src={'/image/tutor.png'} width={PROFILE_SIZE} height={PROFILE_SIZE} alt="" />
-            )}
+            <Image src={`/image/${typingImage}.png`} width={PROFILE_SIZE} height={PROFILE_SIZE} alt="" />
           </Profile>
           <TextLoading fill="Contrast" marginTop={12} />
         </MessageRow>
