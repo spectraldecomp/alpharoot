@@ -14,9 +14,7 @@ export interface TurnState {
   roundNumber: number
 }
 
-export interface PedagogicalState {
-  // Placeholder
-}
+export type PedagogicalState = Record<string, never>
 
 export interface GameState {
   board: BoardState
@@ -182,24 +180,6 @@ export const MARQUISE_TOTAL_WARRIORS = 25
 export const MARQUISE_TOTAL_WOOD = 8
 export const EYRIE_TOTAL_WARRIORS = 20
 export const WOODLAND_ALLIANCE_TOTAL_WARRIORS = 10
-
-const MARQUISE_TRACK_KEY = {
-  sawmill: 'marquise_sawmill',
-  workshop: 'marquise_workshop',
-  recruiter: 'marquise_recruiter',
-} as const
-
-export type MarquiseTrackKey = (typeof MARQUISE_TRACK_KEY)[keyof typeof MARQUISE_TRACK_KEY]
-
-const CORNER_KEYWORDS = ['nw', 'ne', 'se', 'sw'] as const
-type CornerKeyword = (typeof CORNER_KEYWORDS)[number]
-
-const OPPOSITE_CORNERS: Record<CornerKeyword, CornerKeyword> = {
-  nw: 'se',
-  ne: 'sw',
-  se: 'nw',
-  sw: 'ne',
-}
 
 export const MARQUISE_BUILDING_TRACKS: Record<'sawmill' | 'workshop' | 'recruiter', BuildingTrackDefinition> = {
   sawmill: {

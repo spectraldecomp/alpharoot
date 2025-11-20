@@ -16,11 +16,22 @@ import { DEFAULT_LIGHT_THEME } from '@wookiejin/react-component'
 import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { SimulateActionResponse } from '../api/game/simulate/route'
 import { ChatCompletionParams } from '../api/chatComplete/route'
 
 export type MultiPartyChat = (ChatCompletionParams['conversation'][number] & {
   faction?: 'cat' | 'alliance' | 'eyrie'
 })[]
+
+type SimulatableFaction = Exclude<FactionId, 'marquise'>
+
+type AIActionHistoryEntry = {
+  id: string
+  faction: FactionId
+  action: string
+  reasoning: string
+  timestamp: number
+}
 
 const DIFFICULTY_LABELS = ['Easy', 'Medium', 'Hard'] as const
 
@@ -29,6 +40,9 @@ const FACTION_META: Record<FactionId, { label: string; color: string }> = {
   eyrie: { label: 'Eyrie Dynasties', color: '#4a90e2' },
   woodland_alliance: { label: 'Woodland Alliance', color: '#27ae60' },
 }
+
+const isSimulatableFaction = (faction: FactionId): faction is SimulatableFaction =>
+  faction === 'eyrie' || faction === 'woodland_alliance'
 
 const VICTORY_TARGET = 30
 const formatPhaseLabel = (phase: GameState['turn']['phase']) => phase.charAt(0).toUpperCase() + phase.slice(1)
@@ -87,6 +101,14 @@ export default function Home() {
   const [isRecruitMode, setIsRecruitMode] = useState(false)
   const [recruitClearing, setRecruitClearing] = useState<string | null>(null)
   const [recruitWarriorCount, setRecruitWarriorCount] = useState(1)
+
+  // Place wood action state
+  const [isPlaceWoodMode, setIsPlaceWoodMode] = useState(false)
+  const [placeWoodClearing, setPlaceWoodClearing] = useState<string | null>(null)
+
+  // AI simulation state
+  const [aiActionHistory, setAiActionHistory] = useState<AIActionHistoryEntry[]>([])
+  const [isSimulatingAction, setIsSimulatingAction] = useState(false)
 
   const tutorChat = useCallback(async () => {
     if (loadingTutorResponse) return
@@ -191,6 +213,8 @@ export default function Home() {
       setIsRecruitMode(false)
       setRecruitClearing(null)
       setRecruitWarriorCount(1)
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
     }
   }, [isMarchMode])
 
@@ -296,6 +320,8 @@ export default function Home() {
       setIsRecruitMode(false)
       setRecruitClearing(null)
       setRecruitWarriorCount(1)
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
     }
   }, [isBattleMode])
 
@@ -473,6 +499,8 @@ export default function Home() {
       setIsRecruitMode(false)
       setRecruitClearing(null)
       setRecruitWarriorCount(1)
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
     }
   }, [buildMode])
 
@@ -494,6 +522,8 @@ export default function Home() {
       setIsRecruitMode(false)
       setRecruitClearing(null)
       setRecruitWarriorCount(1)
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
     }
   }, [buildMode])
 
@@ -515,6 +545,8 @@ export default function Home() {
       setIsRecruitMode(false)
       setRecruitClearing(null)
       setRecruitWarriorCount(1)
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
     }
   }, [buildMode])
 
@@ -613,6 +645,8 @@ export default function Home() {
       setBattleDefender(null)
       setBuildMode(null)
       setBuildClearing(null)
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
     }
   }, [isRecruitMode])
 
@@ -697,46 +731,307 @@ export default function Home() {
     return Math.min(recruitersInClearing, gameState.factions.marquise.warriorsInSupply)
   }, [recruitClearing, gameState.board.clearings, gameState.factions.marquise.warriorsInSupply])
 
-  const logistics = useMemo(() => {
-    const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
-      .filter(([, planted]) => planted)
-      .map(([suit]) => suit.replace(/^\w/, c => c.toUpperCase()))
-      .join(', ')
-      .replace(/_/g, ' ')
-    return [
-      {
-        id: 'marquise' as FactionId,
-        primary: `${gameState.factions.marquise.warriorsInSupply} warriors in supply`,
-        secondary: `Wood: ${gameState.factions.marquise.woodInSupply}`,
-        tags: [
-          `Sawmills · ${gameState.factions.marquise.totalSawmillsOnMap}`,
-          `Workshops · ${gameState.factions.marquise.totalWorkshopsOnMap}`,
-          `Recruiters · ${gameState.factions.marquise.totalRecruitersOnMap}`,
-        ],
-        victory: gameState.victoryTrack.marquise,
-      },
-      {
-        id: 'eyrie' as FactionId,
-        primary: `${gameState.factions.eyrie.warriorsInSupply} warriors in supply`,
-        secondary: `Roosts on map: ${gameState.factions.eyrie.roostsOnMap}`,
-        tags: (['recruit', 'move', 'battle', 'build'] as DecreeColumn[]).map(column => {
-          const label = column.replace(/^\w/, c => c.toUpperCase())
-          return `${label} · ${gameState.factions.eyrie.decree.columns[column].length}`
+  // Place wood handlers
+  const togglePlaceWood = useCallback(() => {
+    if (isPlaceWoodMode) {
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
+    } else {
+      setIsPlaceWoodMode(true)
+      setPlaceWoodClearing(null)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setBuildMode(null)
+      setBuildClearing(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [isPlaceWoodMode])
+
+  const cancelPlaceWood = useCallback(() => {
+    setIsPlaceWoodMode(false)
+    setPlaceWoodClearing(null)
+  }, [])
+
+  const handlePlaceWoodClearingClick = useCallback(
+    (clearingId: string) => {
+      if (!isPlaceWoodMode) return
+
+      if (gameState.factions.marquise.woodInSupply <= 0) {
+        alert('No wood available in supply.')
+        return
+      }
+
+      const clearing = gameState.board.clearings[clearingId]
+      if (!clearing) return
+
+      const sawmillsInClearing = clearing.buildings.filter(
+        b => b.faction === 'marquise' && b.type === 'sawmill',
+      ).length
+
+      if (sawmillsInClearing === 0) {
+        alert('Select a clearing with at least one sawmill.')
+        return
+      }
+
+      setPlaceWoodClearing(clearingId)
+    },
+    [gameState.board.clearings, gameState.factions.marquise.woodInSupply, isPlaceWoodMode],
+  )
+
+  const executePlaceWood = useCallback(async () => {
+    if (!placeWoodClearing) return
+
+    try {
+      const response = await fetch('/api/game/placeWood', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: gameState,
+          clearingId: placeWoodClearing,
         }),
-        victory: gameState.victoryTrack.eyrie,
-      },
-      {
-        id: 'woodland_alliance' as FactionId,
-        primary: `${gameState.factions.woodland_alliance.warriorsInSupply} warriors in supply`,
-        secondary: `Officers: ${gameState.factions.woodland_alliance.officers}`,
-        tags: [
-          `Sympathy · ${gameState.factions.woodland_alliance.sympathyOnMap}`,
-          `Bases · ${allianceBases || 'None'}`,
-        ],
-        victory: gameState.victoryTrack.woodland_alliance,
-      },
-    ]
-  }, [gameState])
+      })
+
+      if (!response.ok) {
+        const raw = await response.text().catch(() => '')
+        let parsed: { message?: string } | null = null
+        try {
+          parsed = raw ? (JSON.parse(raw) as { message?: string }) : null
+        } catch {
+          parsed = null
+        }
+        const fallback = raw || 'Failed to place wood'
+        throw new Error(parsed?.message ?? fallback)
+      }
+
+      const data = await response.json()
+      setGameState(data.state)
+      setLastPlayerAction(`Placed wood in clearing #${placeWoodClearing.toUpperCase()}`)
+      cancelPlaceWood()
+    } catch (error) {
+      console.error('Place wood error:', error)
+      alert(error instanceof Error ? error.message : 'Failed to place wood')
+    }
+  }, [cancelPlaceWood, gameState, placeWoodClearing])
+
+  const handleCraftCard = useCallback(() => {
+    alert('Crafting cards is not implemented yet.')
+  }, [])
+
+  const validPlaceWoodClearings = useMemo(() => {
+    if (!isPlaceWoodMode) return []
+
+    return Object.entries(gameState.board.clearings)
+      .filter(([, clearing]) => {
+        const sawmills = clearing.buildings.filter(b => b.faction === 'marquise' && b.type === 'sawmill').length
+        if (sawmills === 0) return false
+
+        return gameState.factions.marquise.woodInSupply > 0
+      })
+      .map(([id]) => id)
+  }, [gameState.board.clearings, gameState.factions.marquise.woodInSupply, isPlaceWoodMode])
+
+  const simulateFactionAction = useCallback(
+    async (faction: SimulatableFaction) => {
+      if (isSimulatingAction) return
+      setIsSimulatingAction(true)
+      try {
+        const factionHistory = aiActionHistory.filter(entry => entry.faction === faction).slice(-3)
+        const response = await fetch('/api/game/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            state: gameState,
+            faction,
+            recentActions: factionHistory.map(entry => ({ action: entry.action })),
+          }),
+        })
+
+        if (!response.ok) {
+          const raw = await response.text().catch(() => '')
+          let parsed: { message?: string; error?: unknown } | null = null
+          try {
+            parsed = raw ? (JSON.parse(raw) as { message?: string; error?: unknown }) : null
+          } catch {
+            parsed = null
+          }
+          const normalize = (value: unknown): string | undefined => {
+            if (!value) return undefined
+            if (typeof value === 'string') return value
+            if (value instanceof Error) return value.message
+            if (typeof value === 'object') {
+              const candidate = value as { message?: string; typeName?: string; type?: string }
+              return candidate.message ?? candidate.typeName ?? candidate.type ?? JSON.stringify(value)
+            }
+            return String(value)
+          }
+          const fallback = raw || response.statusText || 'Failed to simulate action'
+          throw new Error(parsed?.message ?? normalize(parsed?.error) ?? fallback)
+        }
+
+        const simulation = (await response.json()) as SimulateActionResponse
+        let updatedState = gameState
+        let description = ''
+        let stateChanged = false
+
+        const applyAction = async (url: string, payload: Record<string, unknown>) => {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          if (!res.ok) {
+            const rawError = await res.text().catch(() => '')
+            let parsedError: { message?: string } | null = null
+            try {
+              parsedError = rawError ? (JSON.parse(rawError) as { message?: string }) : null
+            } catch {
+              parsedError = null
+            }
+            const actionName = url.split('/').pop()
+            const fallbackMessage = rawError || `Failed to apply simulated ${actionName} action`
+            throw new Error(parsedError?.message ?? fallbackMessage)
+          }
+          return res.json()
+        }
+
+        switch (simulation.action.type) {
+          case 'move': {
+            const data = await applyAction('/api/game/move', {
+              state: updatedState,
+              faction,
+              from: simulation.action.from,
+              to: simulation.action.to,
+              warriors: simulation.action.warriors,
+            })
+            updatedState = data.state
+            stateChanged = true
+            description = `${FACTION_META[faction].label} moved ${simulation.action.warriors} warriors from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()}`
+            break
+          }
+          case 'battle': {
+            const data = await applyAction('/api/game/battle', {
+              state: updatedState,
+              clearingId: simulation.action.clearingId,
+              attacker: faction,
+              defender: simulation.action.defender,
+            })
+            updatedState = data.state
+            stateChanged = true
+            description = `${FACTION_META[faction].label} battled ${FACTION_META[simulation.action.defender].label} in #${simulation.action.clearingId.toUpperCase()}`
+            break
+          }
+          case 'build': {
+            const data = await applyAction('/api/game/build', {
+              state: updatedState,
+              faction,
+              clearingId: simulation.action.clearingId,
+              buildingType: simulation.action.buildingType,
+            })
+            updatedState = data.state
+            stateChanged = true
+            const structure =
+              simulation.action.buildingType?.replace(/_/g, ' ') ??
+              (faction === 'eyrie' ? 'roost' : 'building')
+            description = `${FACTION_META[faction].label} built ${structure} in #${simulation.action.clearingId.toUpperCase()}`
+            break
+          }
+          case 'token': {
+            if (faction !== 'woodland_alliance') {
+              throw new Error('Only the Woodland Alliance can place tokens in this mode')
+            }
+            const data = await applyAction('/api/game/token', {
+              state: updatedState,
+              faction,
+              clearingId: simulation.action.clearingId,
+              tokenType: simulation.action.tokenType,
+            })
+            updatedState = data.state
+            stateChanged = true
+            description = `${FACTION_META[faction].label} placed a ${simulation.action.tokenType} token in #${simulation.action.clearingId.toUpperCase()}`
+            break
+          }
+          case 'pass': {
+            description = `${FACTION_META[faction].label} passed: ${simulation.action.reason}`
+            break
+          }
+          default:
+            throw new Error('Simulated action is not supported yet')
+        }
+
+        const historyDescription =
+          description || `${FACTION_META[faction].label} completed a simulated action.`
+
+        if (stateChanged) {
+          setGameState(updatedState)
+        }
+        setLastPlayerAction(historyDescription)
+        setAiActionHistory(prev => {
+          const next: AIActionHistoryEntry[] = [
+            ...prev,
+            {
+              id: `${faction}_${Date.now()}`,
+              faction,
+              action: historyDescription,
+              reasoning: simulation.reasoning,
+              timestamp: Date.now(),
+            },
+          ]
+          return next.slice(-20)
+        })
+      } catch (error) {
+        console.error('Simulation error:', error)
+        alert(error instanceof Error ? error.message : 'Failed to simulate AI action')
+      } finally {
+        setIsSimulatingAction(false)
+      }
+    },
+    [aiActionHistory, gameState, isSimulatingAction],
+  )
+
+  const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
+    .filter(([, planted]) => planted)
+    .map(([suit]) => suit.replace(/^\w/, c => c.toUpperCase()).replace(/_/g, ' '))
+  const allianceBaseLabel = allianceBases.length > 0 ? allianceBases.join(', ') : 'None'
+  const logistics = [
+    {
+      id: 'marquise' as FactionId,
+      primary: `${gameState.factions.marquise.warriorsInSupply} warriors in supply`,
+      secondary: `Wood: ${gameState.factions.marquise.woodInSupply}`,
+      tags: [
+        `Sawmills · ${gameState.factions.marquise.totalSawmillsOnMap}`,
+        `Workshops · ${gameState.factions.marquise.totalWorkshopsOnMap}`,
+        `Recruiters · ${gameState.factions.marquise.totalRecruitersOnMap}`,
+      ],
+      victory: gameState.victoryTrack.marquise,
+    },
+    {
+      id: 'eyrie' as FactionId,
+      primary: `${gameState.factions.eyrie.warriorsInSupply} warriors in supply`,
+      secondary: `Roosts on map: ${gameState.factions.eyrie.roostsOnMap}`,
+      tags: (['recruit', 'move', 'battle', 'build'] as DecreeColumn[]).map(column => {
+        const label = column.replace(/^\w/, c => c.toUpperCase())
+        return `${label} · ${gameState.factions.eyrie.decree.columns[column].length}`
+      }),
+      victory: gameState.victoryTrack.eyrie,
+    },
+    {
+      id: 'woodland_alliance' as FactionId,
+      primary: `${gameState.factions.woodland_alliance.warriorsInSupply} warriors in supply`,
+      secondary: `Officers: ${gameState.factions.woodland_alliance.officers}`,
+      tags: [
+        `Sympathy · ${gameState.factions.woodland_alliance.sympathyOnMap}`,
+        `Bases · ${allianceBaseLabel}`,
+      ],
+      victory: gameState.victoryTrack.woodland_alliance,
+    },
+  ]
 
   return (
     <ThemeProvider theme={DEFAULT_LIGHT_THEME}>
@@ -782,7 +1077,9 @@ export default function Home() {
                 definition={WOODLAND_BOARD_DEFINITION}
                 state={gameState}
                 selectableClearings={
-                  isMarchMode
+                  isPlaceWoodMode
+                    ? validPlaceWoodClearings
+                    : isMarchMode
                     ? [...validFromClearings, ...validToClearings]
                     : isBattleMode
                     ? validBattleClearings
@@ -793,6 +1090,7 @@ export default function Home() {
                     : []
                 }
                 selectedClearing={
+                  placeWoodClearing ||
                   marchFromClearing ||
                   marchToClearing ||
                   battleClearing ||
@@ -801,7 +1099,9 @@ export default function Home() {
                   undefined
                 }
                 onClearingClick={
-                  isMarchMode
+                  isPlaceWoodMode
+                    ? handlePlaceWoodClearingClick
+                    : isMarchMode
                     ? handleClearingClick
                     : isBattleMode
                     ? handleBattleClearingClick
@@ -809,7 +1109,7 @@ export default function Home() {
                     ? handleBuildClearingClick
                     : isRecruitMode
                     ? handleRecruitClearingClick
-                    : () => {}
+                    : undefined
                 }
               />
             </GameBoardWrapper>
@@ -819,47 +1119,99 @@ export default function Home() {
                   <Image src="/image/cat.png" alt="Marquise de Cat" width={24} height={24} />
                   Actions
                 </HudTitle>
-                {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
-                  <ActionSection>
-                    <PhaseLabel>Birdsong</PhaseLabel>
-                    <ActionGrid>
-                      <ActionButton disabled>Place Wood</ActionButton>
-                      <ActionButton disabled>Craft Card</ActionButton>
-                    </ActionGrid>
-                  </ActionSection>
-                )}
-                {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'daylight' && (
-                  <ActionSection>
-                    <PhaseLabel>Daylight</PhaseLabel>
-                    <ActionGrid>
-                      <ActionButton onClick={toggleBattle}>{isBattleMode ? 'Cancel Battle' : 'Battle'}</ActionButton>
-                      <ActionButton onClick={toggleMarch}>{isMarchMode ? 'Cancel March' : 'March'}</ActionButton>
-                      <ActionButton onClick={toggleRecruit}>
-                        {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
-                      </ActionButton>
-                      <ActionButton onClick={toggleBuildSawmill}>
-                        {buildMode === 'sawmill' ? 'Cancel Build' : 'Build Sawmill'}
-                      </ActionButton>
-                      <ActionButton onClick={toggleBuildWorkshop}>
-                        {buildMode === 'workshop' ? 'Cancel Build' : 'Build Workshop'}
-                      </ActionButton>
-                      <ActionButton onClick={toggleBuildRecruiter}>
-                        {buildMode === 'recruiter' ? 'Cancel Build' : 'Build Recruiter'}
-                      </ActionButton>
-                      {/* <ActionButton disabled>Overwork</ActionButton> */}
-                    </ActionGrid>
-                  </ActionSection>
-                )}
-                {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'evening' && (
-                  <ActionSection>
-                    <PhaseLabel>Evening</PhaseLabel>
-                    <ActionGrid>
-                      <ActionButton disabled>Draw & Discard</ActionButton>
-                      <ActionButton disabled>Score Points</ActionButton>
-                    </ActionGrid>
-                  </ActionSection>
-                )}
-                {isMarchMode && (
+              <ActionsLayout>
+                <ActionControlsColumn>
+                  {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
+                    <ActionSection>
+                      <PhaseLabel>Birdsong</PhaseLabel>
+                      <ActionGrid>
+                        <ActionButton onClick={togglePlaceWood}>
+                          {isPlaceWoodMode ? 'Cancel Place Wood' : 'Place Wood'}
+                        </ActionButton>
+                        <ActionButton onClick={handleCraftCard}>Craft Card</ActionButton>
+                      </ActionGrid>
+                    </ActionSection>
+                  )}
+                  {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'daylight' && (
+                    <ActionSection>
+                      <PhaseLabel>Daylight</PhaseLabel>
+                      <ActionGrid>
+                        <ActionButton onClick={toggleBattle}>{isBattleMode ? 'Cancel Battle' : 'Battle'}</ActionButton>
+                        <ActionButton onClick={toggleMarch}>{isMarchMode ? 'Cancel March' : 'March'}</ActionButton>
+                        <ActionButton onClick={toggleRecruit}>
+                          {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
+                        </ActionButton>
+                        <ActionButton onClick={toggleBuildSawmill}>
+                          {buildMode === 'sawmill' ? 'Cancel Build' : 'Build Sawmill'}
+                        </ActionButton>
+                        <ActionButton onClick={toggleBuildWorkshop}>
+                          {buildMode === 'workshop' ? 'Cancel Build' : 'Build Workshop'}
+                        </ActionButton>
+                        <ActionButton onClick={toggleBuildRecruiter}>
+                          {buildMode === 'recruiter' ? 'Cancel Build' : 'Build Recruiter'}
+                        </ActionButton>
+                      </ActionGrid>
+                    </ActionSection>
+                  )}
+                  {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'evening' && (
+                    <ActionSection>
+                      <PhaseLabel>Evening</PhaseLabel>
+                      <ActionGrid>
+                        <ActionButton disabled>Draw & Discard</ActionButton>
+                        <ActionButton disabled>Score Points</ActionButton>
+                      </ActionGrid>
+                    </ActionSection>
+                  )}
+                  {isPlaceWoodMode && (
+                  <MarchPanel>
+                    <MarchTitle>Place Wood</MarchTitle>
+                    {!placeWoodClearing && (
+                      <>
+                        <MarchInstruction>Select a clearing with at least one Marquise sawmill</MarchInstruction>
+                        <MarchInstruction>
+                          Wood in supply: <strong>{gameState.factions.marquise.woodInSupply}</strong>
+                        </MarchInstruction>
+                      </>
+                    )}
+                    {placeWoodClearing && (
+                      <>
+                        <MarchInstruction>
+                          Place wood in <strong>#{placeWoodClearing.toUpperCase()}</strong>
+                        </MarchInstruction>
+                        <MarchInstruction>
+                          Sawmills in clearing:{' '}
+                          <strong>
+                            {(() => {
+                              const clearing = gameState.board.clearings[placeWoodClearing]
+                              return clearing?.buildings.filter(
+                                b => b.faction === 'marquise' && b.type === 'sawmill',
+                              ).length
+                            })()}
+                          </strong>
+                        </MarchInstruction>
+                        <MarchInstruction>
+                          Existing wood tokens:{' '}
+                          <strong>
+                            {(() => {
+                              const clearing = gameState.board.clearings[placeWoodClearing]
+                              return clearing?.tokens.filter(t => t.faction === 'marquise' && t.type === 'wood').length
+                            })()}
+                          </strong>
+                        </MarchInstruction>
+                        <MarchButtonRow>
+                          <ActionButton onClick={executePlaceWood}>Place Wood</ActionButton>
+                          <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
+                        </MarchButtonRow>
+                      </>
+                    )}
+                    {!placeWoodClearing && (
+                      <MarchButtonRow>
+                        <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
+                      </MarchButtonRow>
+                    )}
+                  </MarchPanel>
+                  )}
+                  {isMarchMode && (
                   <MarchPanel>
                     <MarchTitle>March Action</MarchTitle>
                     {!marchFromClearing && (
@@ -901,8 +1253,8 @@ export default function Home() {
                       </MarchButtonRow>
                     )}
                   </MarchPanel>
-                )}
-                {isBattleMode && (
+                  )}
+                  {isBattleMode && (
                   <MarchPanel>
                     <MarchTitle>Battle Action</MarchTitle>
                     {!battleClearing && <MarchInstruction>Select a clearing with enemies to battle</MarchInstruction>}
@@ -945,8 +1297,8 @@ export default function Home() {
                       </MarchButtonRow>
                     )}
                   </MarchPanel>
-                )}
-                {buildMode && (
+                  )}
+                  {buildMode && (
                   <MarchPanel>
                     <MarchTitle>Build {buildMode.charAt(0).toUpperCase() + buildMode.slice(1)}</MarchTitle>
                     {!buildClearing && (
@@ -990,8 +1342,8 @@ export default function Home() {
                       </MarchButtonRow>
                     )}
                   </MarchPanel>
-                )}
-                {isRecruitMode && (
+                  )}
+                  {isRecruitMode && (
                   <MarchPanel>
                     <MarchTitle>Recruit Warriors</MarchTitle>
                     {!recruitClearing && (
@@ -1042,12 +1394,53 @@ export default function Home() {
                       </MarchButtonRow>
                     )}
                   </MarchPanel>
-                )}
-                {gameState.turn.currentFaction !== 'marquise' && (
-                  <ActionSection>
-                    <DisabledMessage>Wait for Marquise de Cat&apos;s turn</DisabledMessage>
-                  </ActionSection>
-                )}
+                  )}
+                  {gameState.turn.currentFaction !== 'marquise' && (
+                    <ActionSection>
+                      <DisabledMessage>Wait for Marquise de Cat&apos;s turn</DisabledMessage>
+                    </ActionSection>
+                  )}
+                  {isSimulatableFaction(gameState.turn.currentFaction) && (
+                    <ActionSection>
+                      <PhaseLabel>AI Simulation</PhaseLabel>
+                      <ActionGrid>
+                        <ActionButton
+                          onClick={() => simulateFactionAction(gameState.turn.currentFaction)}
+                          disabled={isSimulatingAction}
+                        >
+                          {isSimulatingAction
+                            ? 'Simulating...'
+                            : `Simulate ${FACTION_META[gameState.turn.currentFaction].label}`}
+                        </ActionButton>
+                      </ActionGrid>
+                    </ActionSection>
+                  )}
+                </ActionControlsColumn>
+                <ActionHistoryColumn>
+                  <ActionHistoryTitle>AI Action History</ActionHistoryTitle>
+                  <ActionHistoryList>
+                    {aiActionHistory.length === 0 ? (
+                      <ActionHistoryEmpty>No AI turns have been simulated yet.</ActionHistoryEmpty>
+                    ) : (
+                      aiActionHistory
+                        .slice()
+                        .reverse()
+                        .map(entry => (
+                          <ActionHistoryItem key={entry.id}>
+                            <ActionHistoryFaction faction={entry.faction}>
+                              {FACTION_META[entry.faction].label}
+                            </ActionHistoryFaction>
+                            <ActionHistoryAction>{entry.action}</ActionHistoryAction>
+                            <ActionHistoryReasoning>{entry.reasoning}</ActionHistoryReasoning>
+                            <ActionHistoryTimestamp>
+                              {new Date(entry.timestamp).toLocaleTimeString()}
+                            </ActionHistoryTimestamp>
+                          </ActionHistoryItem>
+                        ))
+                    )}
+                  </ActionHistoryList>
+                </ActionHistoryColumn>
+              </ActionsLayout>
               </HudPanel>
               <HudPanel>
                 <HudTitle>Turn Summary</HudTitle>
@@ -1382,10 +1775,85 @@ const LogisticsTags = styled.div`
   gap: 4px;
 `
 
+const ActionHistoryList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+`
+
+const ActionHistoryItem = styled.div`
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+`
+
+const ActionHistoryFaction = styled.div<{ faction: FactionId }>`
+  font-weight: 700;
+  color: ${({ faction }) => FACTION_META[faction].color};
+`
+
+const ActionHistoryAction = styled.div`
+  font-size: 13px;
+  line-height: 1.4;
+`
+
+const ActionHistoryReasoning = styled.div`
+  font-size: 12px;
+  color: #5f6c7b;
+  line-height: 1.4;
+`
+
+const ActionHistoryTimestamp = styled.div`
+  font-size: 11px;
+  color: #9aa5b1;
+  text-align: right;
+`
+
+const ActionHistoryEmpty = styled.div`
+  text-align: center;
+  color: #7e868c;
+  padding: 24px 0;
+  font-size: 13px;
+`
+
 const ActionSection = styled.div`
   display: flex;
   flex-direction: column;
   gap: 10px;
+`
+
+const ActionsLayout = styled.div`
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+`
+
+const ActionControlsColumn = styled.div`
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`
+
+const ActionHistoryColumn = styled.div`
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`
+
+const ActionHistoryTitle = styled.div`
+  font-size: 13px;
+  font-weight: 700;
+  color: #d96a3d;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 `
 
 const PhaseLabel = styled.div`

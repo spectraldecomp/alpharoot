@@ -138,12 +138,12 @@ export const executeBattleAction = ({
   const lowerRoll = Math.min(dice[0], dice[1])
   
   // Maximum rolled hits limited by warrior count
-  let attackerRolledHits = Math.min(higherRoll, attackerWarriors)
-  let defenderRolledHits = Math.min(lowerRoll, defenderWarriors)
+  const attackerRolledHits = Math.min(higherRoll, attackerWarriors)
+  const defenderRolledHits = Math.min(lowerRoll, defenderWarriors)
   
   // Extra hits (not from dice)
   let attackerExtraHits = 0
-  let defenderExtraHits = 0
+  const defenderExtraHits = 0
   
   // Defenseless rule: If defender has no warriors, attacker gets +1 hit
   if (defenderWarriors === 0) {
@@ -446,6 +446,44 @@ export const executeTokenPlacement = ({
   }
   clearingState.tokens.push(token)
   recomputeDerivedGameState(nextState)
+  return { state: nextState, token }
+}
+
+export type PlaceWoodActionRequest = {
+  state: GameState
+  clearingId: string
+}
+
+export type PlaceWoodActionResponse = {
+  state: GameState
+  token: TokenInstance
+}
+
+export const executePlaceWoodAction = ({ state, clearingId }: PlaceWoodActionRequest): PlaceWoodActionResponse => {
+  const nextState = cloneState(state)
+  const clearingState = nextState.board.clearings[clearingId]
+  if (!clearingState) {
+    throw new Error(`Clearing ${clearingId} not found`)
+  }
+
+  const sawmillCount = clearingState.buildings.filter(b => b.faction === 'marquise' && b.type === 'sawmill').length
+  if (sawmillCount === 0) {
+    throw new Error('Wood can only be placed in clearings that contain a Marquise sawmill')
+  }
+
+  if (nextState.factions.marquise.woodInSupply <= 0) {
+    throw new Error('No wood remaining in Marquise supply')
+  }
+
+  const token: TokenInstance = {
+    id: nextId(`marquise_wood_${clearingId}`, clearingState.tokens.length),
+    faction: 'marquise',
+    type: 'wood',
+  }
+
+  clearingState.tokens.push(token)
+  recomputeDerivedGameState(nextState)
+
   return { state: nextState, token }
 }
 

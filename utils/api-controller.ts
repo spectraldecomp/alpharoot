@@ -7,14 +7,12 @@ export function apiController<P, R>(handler: (params: P) => Promise<R>) {
       const res = await handler(reqBody as P)
       return NextResponse.json(res, { status: 200 })
     } catch (error) {
-      console.error(req.url, (error as any).toString())
-      if (error instanceof Error) {
-        const { message, cause } = error
-        if (cause === 403) {
-          return NextResponse.json({ message }, { status: 403 })
-        }
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error(req.url, errorMessage)
+      if (error instanceof Error && error.cause === 403) {
+        return NextResponse.json({ message: errorMessage }, { status: 403 })
       }
-      return NextResponse.json({ message: (error as any).toString() }, { status: 500 })
+      return NextResponse.json({ message: errorMessage }, { status: 500 })
     }
   }
 }

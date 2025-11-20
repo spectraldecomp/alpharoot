@@ -1,10 +1,16 @@
 import { isRejectedWithValue } from '@reduxjs/toolkit'
-import type { MiddlewareAPI, Middleware } from '@reduxjs/toolkit'
+import type { Middleware } from '@reduxjs/toolkit'
 
-export const rtkQueryErrorCatcher: Middleware = (api: MiddlewareAPI) => next => action => {
+type ErrorPayload = {
+  data?: {
+    message?: string
+  }
+}
+
+export const rtkQueryErrorCatcher: Middleware = () => next => action => {
   if (isRejectedWithValue(action)) {
-    const payload: any = action.payload
-    const message = 'data' in payload ? (payload.data as { message: string })?.message : action.error.message
+    const payload = action.payload as ErrorPayload | undefined
+    const message = payload?.data?.message ?? action.error?.message ?? 'Request failed'
     alert(message)
   }
 
