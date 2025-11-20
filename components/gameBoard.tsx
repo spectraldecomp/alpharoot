@@ -1,5 +1,5 @@
 import { BOARD_DIMENSIONS } from '@/gameState/boardDefinition'
-import { BoardDefinition, BuildingInstance, FactionId, GameState, Suit, TokenType } from '@/gameState/schema'
+import { BoardDefinition, BuildingInstance, BuildingType, FactionId, GameState, Suit, TokenType } from '@/gameState/schema'
 import { css } from '@emotion/react'
 import styled from '@emotion/styled'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -46,11 +46,12 @@ export const GameBoard = ({
   selectedClearing,
   onClearingClick,
 }: GameBoardProps) => {
-  const [scale, setScale] = useState(0.85)
+  const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const pointerOrigin = useRef<{ x: number; y: number } | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const initialScaleSet = useRef(false)
 
   const edges = useMemo(() => {
     const unique = new Set<string>()
@@ -69,6 +70,30 @@ export const GameBoard = ({
   }, [definition])
 
   const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
+
+  // Calculate optimal initial scale to fit the board in the viewport and center it
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element || initialScaleSet.current) return
+    
+    const viewportWidth = element.clientWidth
+    const viewportHeight = element.clientHeight
+    
+    const scaleX = viewportWidth / BOARD_DIMENSIONS.width
+    const scaleY = viewportHeight / BOARD_DIMENSIONS.height
+    const optimalScale = Math.min(scaleX, scaleY) * 0.95
+    
+    const clampedScale = clampZoom(optimalScale)
+    setScale(clampedScale)
+    
+    const scaledWidth = BOARD_DIMENSIONS.width * clampedScale
+    const scaledHeight = BOARD_DIMENSIONS.height * clampedScale
+    const offsetX = (viewportWidth - scaledWidth) / 2
+    const offsetY = (viewportHeight - scaledHeight) / 2
+    setOffset({ x: offsetX, y: offsetY })
+    
+    initialScaleSet.current = true
+  }, [])
 
   useEffect(() => {
     const element = viewportRef.current
@@ -112,8 +137,24 @@ export const GameBoard = ({
   }
 
   const resetView = () => {
-    setScale(0.85)
-    setOffset({ x: 0, y: 0 })
+    const element = viewportRef.current
+    if (!element) return
+    
+    const viewportWidth = element.clientWidth
+    const viewportHeight = element.clientHeight
+    const scaleX = viewportWidth / BOARD_DIMENSIONS.width
+    const scaleY = viewportHeight / BOARD_DIMENSIONS.height
+    const optimalScale = Math.min(scaleX, scaleY) * 0.95
+    
+    const clampedScale = clampZoom(optimalScale)
+    setScale(clampedScale)
+    
+    // Center the board
+    const scaledWidth = BOARD_DIMENSIONS.width * clampedScale
+    const scaledHeight = BOARD_DIMENSIONS.height * clampedScale
+    const offsetX = (viewportWidth - scaledWidth) / 2
+    const offsetY = (viewportHeight - scaledHeight) / 2
+    setOffset({ x: offsetX, y: offsetY })
   }
 
   return (
@@ -157,7 +198,31 @@ export const GameBoard = ({
           const warriors = Object.entries(clearingState?.warriors ?? {})
           const isSelectable = selectableClearings.includes(clearing.id)
           const isSelected = selectedClearing === clearing.id
-          
+
+          // Group buildings by faction and type
+          const buildingGroups = new Map<string, { faction: FactionId; type: BuildingType; count: number }>()
+          clearingState?.buildings.forEach(building => {
+            const key = `${building.faction}_${building.type}`
+            const existing = buildingGroups.get(key)
+            if (existing) {
+              existing.count++
+            } else {
+              buildingGroups.set(key, { faction: building.faction, type: building.type, count: 1 })
+            }
+          })
+
+          // Group tokens by faction and type
+          const tokenGroups = new Map<string, { faction: FactionId; type: TokenType; count: number }>()
+          clearingState?.tokens.forEach(token => {
+            const key = `${token.faction}_${token.type}`
+            const existing = tokenGroups.get(key)
+            if (existing) {
+              existing.count++
+            } else {
+              tokenGroups.set(key, { faction: token.faction, type: token.type, count: 1 })
+            }
+          })
+
           return (
             <ClearingNode
               key={clearing.id}
@@ -189,14 +254,14 @@ export const GameBoard = ({
                     ⚔ {amount} {formatFaction(faction as FactionId)}
                   </Badge>
                 ))}
-                {clearingState?.buildings.map(building => (
-                  <Badge key={building.id} color={FACTION_COLORS[building.faction]}>
-                    🏛 {formatBuilding(building.type)}
+                {Array.from(buildingGroups.values()).map((group, idx) => (
+                  <Badge key={`${clearing.id}_building_${idx}`} color={FACTION_COLORS[group.faction]}>
+                    🏛 {group.count > 1 ? `${group.count}× ` : ''}{formatBuilding(group.type)}
                   </Badge>
                 ))}
-                {clearingState?.tokens.map(token => (
-                  <Badge key={token.id} color={FACTION_COLORS[token.faction]}>
-                    {formatToken(token.type)}
+                {Array.from(tokenGroups.values()).map((group, idx) => (
+                  <Badge key={`${clearing.id}_token_${idx}`} color={FACTION_COLORS[group.faction]}>
+                    {group.count > 1 ? `${group.count}× ` : ''}{formatToken(group.type)}
                   </Badge>
                 ))}
               </BadgeRow>
@@ -351,12 +416,16 @@ const ClearingId = styled.div`
   opacity: 0.7;
   font-weight: 600;
   color: #34495e;
+  position: relative;
+  z-index: 10;
 `
 
 const SlotsLabel = styled.div`
   font-size: 10px;
   opacity: 0.6;
   color: #7f8c8d;
+  position: relative;
+  z-index: 10;
 `
 
 const BadgeRow = styled.div`

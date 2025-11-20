@@ -59,10 +59,15 @@ Victory track: Cats ${summary.victoryTrack.marquise} | Eyrie ${summary.victoryTr
 Board summary:
 ${summary.clearings
   .map(
-    clearing =>
-      `- ${clearing.id.toUpperCase()} (${clearing.suit}) | Warriors ${JSON.stringify(
+    clearing => {
+      const clearingDef = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === clearing.id)
+      const buildingSlots = clearingDef?.buildingSlots ?? 0
+      const currentBuildings = clearing.buildings.length
+      const availableSlots = buildingSlots - currentBuildings
+      return `- ${clearing.id.toUpperCase()} (${clearing.suit}) | Warriors ${JSON.stringify(
         clearing.warriors,
-      )} | Buildings ${clearing.buildings.join(', ') || 'none'} | Tokens ${clearing.tokens.join(', ') || 'none'}`,
+      )} | Buildings ${clearing.buildings.join(', ') || 'none'} (${currentBuildings}/${buildingSlots} slots used, ${availableSlots} available) | Tokens ${clearing.tokens.join(', ') || 'none'}`
+    }
   )
   .join('\n')}`
 
@@ -88,7 +93,7 @@ ${summary.clearings
   const actionMenu = `You must choose exactly ONE of the following actions and output valid JSON that matches the schema. Use lowercase clearing ids that exist on the provided board. Legal requirement highlights:
 - Move: source must contain your warriors and destination must be ADJACENT (see adjacency list below). You must leave at least one warrior behind unless rules allow otherwise.
 - Battle: clearing must contain your warriors and enemy pieces.
-- Build: clearing must be valid for your faction (Eyrie = roost anywhere with warriors, Alliance bases must match suit, etc.).
+- Build: clearing must be valid for your faction (Eyrie = roost anywhere with warriors, Alliance bases must match suit, etc.). CRITICAL: You can only build in clearings with AVAILABLE building slots (check the "slots available" count in the board summary above). If a clearing shows "0 available" slots, you CANNOT build there.
 - Token: only Woodland Alliance can place sympathy where legally allowed.
 - Pass: only if no legal action exists.
 

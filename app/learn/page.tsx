@@ -110,6 +110,16 @@ export default function Home() {
   const [aiActionHistory, setAiActionHistory] = useState<AIActionHistoryEntry[]>([])
   const [isSimulatingAction, setIsSimulatingAction] = useState(false)
 
+  // Game manager state
+  const [autoPlayEnabled, setAutoPlayEnabled] = useState(false)
+  const [waitingForPlayerAction, setWaitingForPlayerAction] = useState(false)
+  const [actionsThisPhase, setActionsThisPhase] = useState(0)
+  const autoPlayTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const lastTurnRef = useRef<{ faction: FactionId; phase: string }>({ 
+    faction: gameState.turn.currentFaction, 
+    phase: gameState.turn.phase 
+  })
+
   const tutorChat = useCallback(async () => {
     if (loadingTutorResponse) return
     const trimmedMessage = tutorMessage.trim()
@@ -166,6 +176,8 @@ export default function Home() {
       return next
     })
     setLastPlayerAction(description || 'Advanced phase')
+    setActionsThisPhase(0)
+    setWaitingForPlayerAction(false)
   }, [cloneGameState])
 
   const advanceFaction = useCallback(() => {
@@ -189,7 +201,38 @@ export default function Home() {
   const resetGameState = useCallback(() => {
     setGameState(getScenarioGameState(scenarioIndex))
     setLastPlayerAction(`Reset to ${scenario.title}.`)
+    setAutoPlayEnabled(false)
+    setWaitingForPlayerAction(false)
+    setActionsThisPhase(0)
+    lastTurnRef.current = {
+      faction: getScenarioGameState(scenarioIndex).turn.currentFaction,
+      phase: getScenarioGameState(scenarioIndex).turn.phase
+    }
   }, [scenarioIndex, scenario.title])
+
+  const handlePlayerActionComplete = useCallback(() => {
+    if (gameState.turn.currentFaction === 'marquise') {
+      setActionsThisPhase(prev => prev + 1)
+      setWaitingForPlayerAction(true)
+    }
+  }, [gameState.turn.currentFaction])
+
+  const canPlayerTakeAction = useCallback(() => {
+    if (gameState.turn.currentFaction !== 'marquise') {
+      return true // Not player's turn, allow all actions
+    }
+    
+    // Check action limits based on phase
+    if (gameState.turn.phase === 'birdsong') {
+      return actionsThisPhase < 1 // Birdsong: 1 action
+    } else if (gameState.turn.phase === 'daylight') {
+      return actionsThisPhase < 3 // Daylight: 3 actions
+    } else if (gameState.turn.phase === 'evening') {
+      return actionsThisPhase < 1 // Evening: 1 action
+    }
+    
+    return true
+  }, [gameState.turn.currentFaction, gameState.turn.phase, actionsThisPhase])
 
   // March action handlers
   const toggleMarch = useCallback(() => {
@@ -270,12 +313,27 @@ export default function Home() {
 
       const data = await response.json()
       setGameState(data.state)
+      
+      const description = `Moved ${marchWarriorCount} warrior(s) from #${marchFromClearing.toUpperCase()} to #${marchToClearing.toUpperCase()}`
+      setLastPlayerAction(description)
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `marquise_${Date.now()}`,
+          faction: 'marquise',
+          action: description,
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+      
       cancelMarch()
+      handlePlayerActionComplete()
     } catch (error) {
       console.error('March error:', error)
       alert('Failed to execute march')
     }
-  }, [marchFromClearing, marchToClearing, marchWarriorCount, gameState, cancelMarch])
+  }, [marchFromClearing, marchToClearing, marchWarriorCount, gameState, cancelMarch, handlePlayerActionComplete])
 
   // Get valid clearings for march selection
   const validFromClearings = useMemo(() => {
@@ -425,12 +483,26 @@ export default function Home() {
 
       alert(resultMessage)
 
+      const description = `Battled ${FACTION_META[battleDefender].label} in clearing #${battleClearing.toUpperCase()}`
+      setLastPlayerAction(description)
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `marquise_${Date.now()}`,
+          faction: 'marquise',
+          action: description,
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+
       cancelBattle()
+      handlePlayerActionComplete()
     } catch (error) {
       console.error('Battle error:', error)
       alert('Failed to execute battle')
     }
-  }, [battleClearing, battleDefender, gameState, cancelBattle])
+  }, [battleClearing, battleDefender, gameState, cancelBattle, handlePlayerActionComplete])
 
   // Get valid clearings for battle selection
   const validBattleClearings = useMemo(() => {
@@ -600,12 +672,26 @@ export default function Home() {
           `New VP total: ${data.state.victoryTrack.marquise}`
       )
 
+      const description = `Built ${buildMode} in clearing #${buildClearing.toUpperCase()}`
+      setLastPlayerAction(description)
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `marquise_${Date.now()}`,
+          faction: 'marquise',
+          action: description,
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+
       cancelBuild()
+      handlePlayerActionComplete()
     } catch (error) {
       console.error('Build error:', error)
       alert('Failed to build')
     }
-  }, [buildMode, buildClearing, gameState, cancelBuild])
+  }, [buildMode, buildClearing, gameState, cancelBuild, handlePlayerActionComplete])
 
   // Get valid clearings for building
   const validBuildClearings = useMemo(() => {
@@ -694,12 +780,26 @@ export default function Home() {
           `Warriors in supply: ${data.state.factions.marquise.warriorsInSupply}`
       )
 
+      const description = `Recruited ${recruitWarriorCount} warrior(s) in clearing #${recruitClearing.toUpperCase()}`
+      setLastPlayerAction(description)
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `marquise_${Date.now()}`,
+          faction: 'marquise',
+          action: description,
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+
       cancelRecruit()
+      handlePlayerActionComplete()
     } catch (error) {
       console.error('Recruit error:', error)
       alert('Failed to recruit')
     }
-  }, [recruitClearing, recruitWarriorCount, gameState, cancelRecruit])
+  }, [recruitClearing, recruitWarriorCount, gameState, cancelRecruit, handlePlayerActionComplete])
 
   // Get valid clearings for recruiting
   const validRecruitClearings = useMemo(() => {
@@ -812,16 +912,30 @@ export default function Home() {
 
       const data = await response.json()
       setGameState(data.state)
-      setLastPlayerAction(`Placed wood in clearing #${placeWoodClearing.toUpperCase()}`)
+      
+      const description = `Placed wood in clearing #${placeWoodClearing.toUpperCase()}`
+      setLastPlayerAction(description)
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `marquise_${Date.now()}`,
+          faction: 'marquise',
+          action: description,
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+      
       cancelPlaceWood()
+      handlePlayerActionComplete()
     } catch (error) {
       console.error('Place wood error:', error)
       alert(error instanceof Error ? error.message : 'Failed to place wood')
     }
-  }, [cancelPlaceWood, gameState, placeWoodClearing])
+  }, [cancelPlaceWood, gameState, placeWoodClearing, handlePlayerActionComplete])
 
-  const handleCraftCard = useCallback(() => {
-    alert('Crafting cards is not implemented yet.')
+  const handleNotImplemented = useCallback(() => {
+    alert('This action is not implemented yet.')
   }, [])
 
   const validPlaceWoodClearings = useMemo(() => {
@@ -903,58 +1017,79 @@ export default function Home() {
 
         switch (simulation.action.type) {
           case 'move': {
-            const data = await applyAction('/api/game/move', {
-              state: updatedState,
-              faction,
-              from: simulation.action.from,
-              to: simulation.action.to,
-              warriors: simulation.action.warriors,
-            })
-            updatedState = data.state
-            stateChanged = true
-            description = `${FACTION_META[faction].label} moved ${simulation.action.warriors} warriors from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()}`
+            try {
+              const data = await applyAction('/api/game/move', {
+                state: updatedState,
+                faction,
+                from: simulation.action.from,
+                to: simulation.action.to,
+                warriors: simulation.action.warriors,
+              })
+              updatedState = data.state
+              stateChanged = true
+              description = `${FACTION_META[faction].label} moved ${simulation.action.warriors} warriors from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()}`
+            } catch (error) {
+              console.warn(`Move action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
+              description = `${FACTION_META[faction].label} could not move from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()} - passed instead`
+            }
             break
           }
           case 'battle': {
-            const data = await applyAction('/api/game/battle', {
-              state: updatedState,
-              clearingId: simulation.action.clearingId,
-              attacker: faction,
-              defender: simulation.action.defender,
-            })
-            updatedState = data.state
-            stateChanged = true
-            description = `${FACTION_META[faction].label} battled ${FACTION_META[simulation.action.defender].label} in #${simulation.action.clearingId.toUpperCase()}`
+            try {
+              const data = await applyAction('/api/game/battle', {
+                state: updatedState,
+                clearingId: simulation.action.clearingId,
+                attacker: faction,
+                defender: simulation.action.defender,
+              })
+              updatedState = data.state
+              stateChanged = true
+              description = `${FACTION_META[faction].label} battled ${FACTION_META[simulation.action.defender].label} in #${simulation.action.clearingId.toUpperCase()}`
+            } catch (error) {
+              console.warn(`Battle action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
+              description = `${FACTION_META[faction].label} could not battle in #${simulation.action.clearingId.toUpperCase()} - passed instead`
+            }
             break
           }
           case 'build': {
-            const data = await applyAction('/api/game/build', {
-              state: updatedState,
-              faction,
-              clearingId: simulation.action.clearingId,
-              buildingType: simulation.action.buildingType,
-            })
-            updatedState = data.state
-            stateChanged = true
-            const structure =
-              simulation.action.buildingType?.replace(/_/g, ' ') ??
-              (faction === 'eyrie' ? 'roost' : 'building')
-            description = `${FACTION_META[faction].label} built ${structure} in #${simulation.action.clearingId.toUpperCase()}`
+            try {
+              const data = await applyAction('/api/game/build', {
+                state: updatedState,
+                faction,
+                clearingId: simulation.action.clearingId,
+                buildingType: simulation.action.buildingType,
+              })
+              updatedState = data.state
+              stateChanged = true
+              const structure =
+                simulation.action.buildingType?.replace(/_/g, ' ') ??
+                (faction === 'eyrie' ? 'roost' : 'building')
+              description = `${FACTION_META[faction].label} built ${structure} in #${simulation.action.clearingId.toUpperCase()}`
+            } catch (error) {
+              // If building fails (e.g., no slots available), treat it as a pass
+              console.warn(`Build action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
+              description = `${FACTION_META[faction].label} could not build in #${simulation.action.clearingId.toUpperCase()} (no slots available) - passed instead`
+            }
             break
           }
           case 'token': {
             if (faction !== 'woodland_alliance') {
               throw new Error('Only the Woodland Alliance can place tokens in this mode')
             }
-            const data = await applyAction('/api/game/token', {
-              state: updatedState,
-              faction,
-              clearingId: simulation.action.clearingId,
-              tokenType: simulation.action.tokenType,
-            })
-            updatedState = data.state
-            stateChanged = true
-            description = `${FACTION_META[faction].label} placed a ${simulation.action.tokenType} token in #${simulation.action.clearingId.toUpperCase()}`
+            try {
+              const data = await applyAction('/api/game/token', {
+                state: updatedState,
+                faction,
+                clearingId: simulation.action.clearingId,
+                tokenType: simulation.action.tokenType,
+              })
+              updatedState = data.state
+              stateChanged = true
+              description = `${FACTION_META[faction].label} placed a ${simulation.action.tokenType} token in #${simulation.action.clearingId.toUpperCase()}`
+            } catch (error) {
+              console.warn(`Token placement failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
+              description = `${FACTION_META[faction].label} could not place token in #${simulation.action.clearingId.toUpperCase()} - passed instead`
+            }
             break
           }
           case 'pass': {
@@ -994,6 +1129,97 @@ export default function Home() {
     },
     [aiActionHistory, gameState, isSimulatingAction],
   )
+
+  // Game manager - handles automatic turn flow according to Root rules
+  const processGameFlow = useCallback(async () => {
+    if (!autoPlayEnabled || isSimulatingAction) return
+
+    const currentFaction = gameState.turn.currentFaction
+    const currentPhase = gameState.turn.phase
+
+    // Check if we've moved to a new phase/faction, reset action counter
+    if (lastTurnRef.current.faction !== currentFaction || lastTurnRef.current.phase !== currentPhase) {
+      setActionsThisPhase(0)
+      lastTurnRef.current = { faction: currentFaction, phase: currentPhase }
+    }
+
+    // AI factions (Eyrie, Woodland Alliance)
+    if (isSimulatableFaction(currentFaction)) {
+      setWaitingForPlayerAction(false)
+      
+      // Determine max actions for this phase based on Root rules
+      let maxActions = 0
+      if (currentPhase === 'birdsong') {
+        // Birdsong: typically 1-2 setup actions (e.g., draw cards, resolve decree for Eyrie)
+        maxActions = 1
+      } else if (currentPhase === 'daylight') {
+        // Daylight: Main action phase - Eyrie uses decree, Alliance can do multiple actions
+        // For simplicity, allow 3-5 actions depending on faction
+        maxActions = currentFaction === 'eyrie' ? 4 : 3
+      } else if (currentPhase === 'evening') {
+        // Evening: Draw and discard, score points - typically 1-2 actions
+        maxActions = 1
+      }
+
+      // Take action if haven't reached max
+      if (actionsThisPhase < maxActions) {
+        await simulateFactionAction(currentFaction)
+        setActionsThisPhase(prev => prev + 1)
+      } else {
+        // Phase complete, advance
+        if (autoPlayTimerRef.current) clearTimeout(autoPlayTimerRef.current)
+        autoPlayTimerRef.current = setTimeout(() => {
+          advancePhase()
+        }, 1000)
+      }
+      return
+    }
+
+    // Marquise de Cat (player)
+    if (currentFaction === 'marquise') {
+      if (currentPhase === 'birdsong') {
+        // Birdsong: Player can place wood tokens and craft
+        setWaitingForPlayerAction(true)
+        // Don't auto-advance - let player take actions and manually advance
+      } else if (currentPhase === 'daylight') {
+        // Daylight: Player can take up to 3 actions (craft + 2 main actions typical in Root)
+        // Wait for player input
+        setWaitingForPlayerAction(true)
+        
+        // Don't auto-advance during daylight - player decides when done
+      } else if (currentPhase === 'evening') {
+        // Evening: Draw and discard, score - could be player actions or auto
+        setWaitingForPlayerAction(true)
+        // Don't auto-advance - let player handle evening phase
+      }
+    }
+  }, [
+    autoPlayEnabled, 
+    isSimulatingAction, 
+    gameState.turn.currentFaction, 
+    gameState.turn.phase, 
+    actionsThisPhase,
+    simulateFactionAction, 
+    advancePhase
+  ])
+
+  // Effect to trigger game flow when game state changes or action completes
+  useEffect(() => {
+    if (autoPlayEnabled && !isSimulatingAction) {
+      // Small delay to ensure state has settled
+      const timer = setTimeout(() => {
+        processGameFlow()
+      }, 100)
+      
+      return () => clearTimeout(timer)
+    }
+
+    return () => {
+      if (autoPlayTimerRef.current) {
+        clearTimeout(autoPlayTimerRef.current)
+      }
+    }
+  }, [gameState.turn.currentFaction, gameState.turn.phase, autoPlayEnabled, isSimulatingAction, actionsThisPhase, processGameFlow])
 
   const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
     .filter(([, planted]) => planted)
@@ -1050,27 +1276,58 @@ export default function Home() {
           </TutorChatSection>
           <BoardSection>
             <ScenarioHeader>
-              <div>
-                <ScenarioTitle>{scenario.title}</ScenarioTitle>
-                <ScenarioMeta>
-                  <ScenarioTag>{scenario.type}</ScenarioTag>
-                  <DifficultyBadge difficulty={scenario.difficulty}>
-                    {DIFFICULTY_LABELS[scenario.difficulty]}
-                  </DifficultyBadge>
-                </ScenarioMeta>
-              </div>
-              <ProfileList>
-                <ProfileCard>
-                  <ProfileHeading>Woodland Alliance</ProfileHeading>
-                  <ProfileDetail>Level · {scenario.allianceProfile.proficiencyLevel}</ProfileDetail>
-                  <ProfileDetail>Style · {scenario.allianceProfile.playStyle}</ProfileDetail>
-                </ProfileCard>
-                <ProfileCard>
-                  <ProfileHeading>Eyrie Dynasties</ProfileHeading>
-                  <ProfileDetail>Level · {scenario.eyrieProfile.proficiencyLevel}</ProfileDetail>
-                  <ProfileDetail>Style · {scenario.eyrieProfile.playStyle}</ProfileDetail>
-                </ProfileCard>
-              </ProfileList>
+              <HeaderLeft>
+                <div>
+                  <ScenarioTitle>{scenario.title}</ScenarioTitle>
+                  <ScenarioMeta>
+                    <ScenarioTag>{scenario.type}</ScenarioTag>
+                    <DifficultyBadge difficulty={scenario.difficulty}>
+                      {DIFFICULTY_LABELS[scenario.difficulty]}
+                    </DifficultyBadge>
+                  </ScenarioMeta>
+                </div>
+                <ProfileList>
+                  <ProfileCard>
+                    <ProfileHeading>Woodland Alliance</ProfileHeading>
+                    <ProfileDetail>Level · {scenario.allianceProfile.proficiencyLevel}</ProfileDetail>
+                    <ProfileDetail>Style · {scenario.allianceProfile.playStyle}</ProfileDetail>
+                  </ProfileCard>
+                  <ProfileCard>
+                    <ProfileHeading>Eyrie Dynasties</ProfileHeading>
+                    <ProfileDetail>Level · {scenario.eyrieProfile.proficiencyLevel}</ProfileDetail>
+                    <ProfileDetail>Style · {scenario.eyrieProfile.playStyle}</ProfileDetail>
+                  </ProfileCard>
+                </ProfileList>
+              </HeaderLeft>
+              <HeaderRight>
+                <TurnInfoCompact>
+                  <TurnInfoLabel>Round {gameState.turn.roundNumber}</TurnInfoLabel>
+                  <TurnInfoDivider>•</TurnInfoDivider>
+                  <TurnInfoValue color={FACTION_META[gameState.turn.currentFaction].color}>
+                    {FACTION_META[gameState.turn.currentFaction].label}
+                  </TurnInfoValue>
+                  <TurnInfoDivider>•</TurnInfoDivider>
+                  <TurnInfoLabel>{formatPhaseLabel(gameState.turn.phase)}</TurnInfoLabel>
+                  {gameState.turn.actionSubstep && (
+                    <>
+                      <TurnInfoDivider>•</TurnInfoDivider>
+                      <TurnInfoLabel>{gameState.turn.actionSubstep}</TurnInfoLabel>
+                    </>
+                  )}
+                </TurnInfoCompact>
+                <ActionButtonRow>
+                  <GameManagerToggle onClick={() => setAutoPlayEnabled(!autoPlayEnabled)} active={autoPlayEnabled}>
+                    {autoPlayEnabled ? '⏸ Pause Auto-Play' : '▶ Enable Auto-Play'}
+                  </GameManagerToggle>
+                  {(!autoPlayEnabled || gameState.turn.currentFaction === 'marquise') && (
+                    <>
+                      <ActionButton onClick={advancePhase}>Advance phase</ActionButton>
+                      {!autoPlayEnabled && <ActionButton onClick={advanceFaction}>Pass turn</ActionButton>}
+                    </>
+                  )}
+                  <ActionButton onClick={resetGameState}>Reset</ActionButton>
+                </ActionButtonRow>
+              </HeaderRight>
             </ScenarioHeader>
             <GameBoardWrapper>
               <GameBoard
@@ -1116,38 +1373,78 @@ export default function Home() {
             <HudGrid>
               <HudPanel>
                 <HudTitle>
-                  <Image src="/image/cat.png" alt="Marquise de Cat" width={24} height={24} />
-                  Actions
+                  <Image
+                    src={`/image/${
+                      gameState.turn.currentFaction === 'marquise'
+                        ? 'cat'
+                        : gameState.turn.currentFaction === 'eyrie'
+                        ? 'eyrie'
+                        : 'alliance'
+                    }.png`}
+                    alt={FACTION_META[gameState.turn.currentFaction].label}
+                    width={24}
+                    height={24}
+                  />
+                  <span style={{ color: FACTION_META[gameState.turn.currentFaction].color, fontWeight: 700 }}>
+                    {FACTION_META[gameState.turn.currentFaction].label} Actions
+                  </span>
                 </HudTitle>
               <ActionsLayout>
                 <ActionControlsColumn>
+                  {/* Marquise de Cat Actions */}
                   {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
                     <ActionSection>
-                      <PhaseLabel>Birdsong</PhaseLabel>
+                      <PhaseLabel>Birdsong Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/1 action taken)` : ''}</PhaseLabel>
+                      {waitingForPlayerAction && autoPlayEnabled && (
+                        <PlayerTurnIndicator>
+                          ⏳ Your turn! Take actions, then click "Advance phase" when done.
+                        </PlayerTurnIndicator>
+                      )}
+                      {actionsThisPhase >= 1 && (
+                        <PlayerTurnIndicator>
+                          Maximum actions reached! Click "Advance phase" to continue.
+                        </PlayerTurnIndicator>
+                      )}
                       <ActionGrid>
-                        <ActionButton onClick={togglePlaceWood}>
+                        <ActionButton onClick={togglePlaceWood} disabled={!canPlayerTakeAction() && !isPlaceWoodMode}>
                           {isPlaceWoodMode ? 'Cancel Place Wood' : 'Place Wood'}
                         </ActionButton>
-                        <ActionButton onClick={handleCraftCard}>Craft Card</ActionButton>
+                        <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
+                          Craft Card
+                        </ActionButton>
                       </ActionGrid>
                     </ActionSection>
                   )}
                   {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'daylight' && (
                     <ActionSection>
-                      <PhaseLabel>Daylight</PhaseLabel>
+                      <PhaseLabel>Daylight Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/3 actions taken)` : ''}</PhaseLabel>
+                      {waitingForPlayerAction && autoPlayEnabled && (
+                        <PlayerTurnIndicator>
+                          ⏳ Your turn! Take actions, then click "Advance phase" when done.
+                        </PlayerTurnIndicator>
+                      )}
+                      {actionsThisPhase >= 3 && (
+                        <PlayerTurnIndicator>
+                          Maximum actions reached! Click "Advance phase" to continue.
+                        </PlayerTurnIndicator>
+                      )}
                       <ActionGrid>
-                        <ActionButton onClick={toggleBattle}>{isBattleMode ? 'Cancel Battle' : 'Battle'}</ActionButton>
-                        <ActionButton onClick={toggleMarch}>{isMarchMode ? 'Cancel March' : 'March'}</ActionButton>
-                        <ActionButton onClick={toggleRecruit}>
+                        <ActionButton onClick={toggleBattle} disabled={!canPlayerTakeAction() && !isBattleMode}>
+                          {isBattleMode ? 'Cancel Battle' : 'Battle'}
+                        </ActionButton>
+                        <ActionButton onClick={toggleMarch} disabled={!canPlayerTakeAction() && !isMarchMode}>
+                          {isMarchMode ? 'Cancel March' : 'March'}
+                        </ActionButton>
+                        <ActionButton onClick={toggleRecruit} disabled={!canPlayerTakeAction() && !isRecruitMode}>
                           {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
                         </ActionButton>
-                        <ActionButton onClick={toggleBuildSawmill}>
+                        <ActionButton onClick={toggleBuildSawmill} disabled={!canPlayerTakeAction() && buildMode !== 'sawmill'}>
                           {buildMode === 'sawmill' ? 'Cancel Build' : 'Build Sawmill'}
                         </ActionButton>
-                        <ActionButton onClick={toggleBuildWorkshop}>
+                        <ActionButton onClick={toggleBuildWorkshop} disabled={!canPlayerTakeAction() && buildMode !== 'workshop'}>
                           {buildMode === 'workshop' ? 'Cancel Build' : 'Build Workshop'}
                         </ActionButton>
-                        <ActionButton onClick={toggleBuildRecruiter}>
+                        <ActionButton onClick={toggleBuildRecruiter} disabled={!canPlayerTakeAction() && buildMode !== 'recruiter'}>
                           {buildMode === 'recruiter' ? 'Cancel Build' : 'Build Recruiter'}
                         </ActionButton>
                       </ActionGrid>
@@ -1155,13 +1452,68 @@ export default function Home() {
                   )}
                   {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'evening' && (
                     <ActionSection>
-                      <PhaseLabel>Evening</PhaseLabel>
+                      <PhaseLabel>Evening Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/1 action taken)` : ''}</PhaseLabel>
+                      {waitingForPlayerAction && autoPlayEnabled && (
+                        <PlayerTurnIndicator>
+                          ⏳ Your turn! Take actions, then click "Advance phase" when done.
+                        </PlayerTurnIndicator>
+                      )}
+                      {actionsThisPhase >= 1 && (
+                        <PlayerTurnIndicator>
+                          Maximum actions reached! Click "Advance phase" to continue.
+                        </PlayerTurnIndicator>
+                      )}
                       <ActionGrid>
-                        <ActionButton disabled>Draw & Discard</ActionButton>
-                        <ActionButton disabled>Score Points</ActionButton>
+                        <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
+                          Draw & Discard
+                        </ActionButton>
+                        <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
+                          Score Points
+                        </ActionButton>
                       </ActionGrid>
                     </ActionSection>
                   )}
+
+                  {/* Eyrie Dynasties Actions */}
+                  {gameState.turn.currentFaction === 'eyrie' && (
+                    <ActionSection>
+                      <PhaseLabel>
+                        {formatPhaseLabel(gameState.turn.phase)} Phase
+                      </PhaseLabel>
+                      <AIFactionMessage>
+                        AI-controlled faction. Click "Simulate Action" to let the AI take an action.
+                      </AIFactionMessage>
+                      <ActionGrid>
+                        <ActionButton
+                          onClick={() => simulateFactionAction('eyrie')}
+                          disabled={isSimulatingAction}
+                        >
+                          {isSimulatingAction ? 'Simulating...' : 'Simulate Action'}
+                        </ActionButton>
+                      </ActionGrid>
+                    </ActionSection>
+                  )}
+
+                  {/* Woodland Alliance Actions */}
+                  {gameState.turn.currentFaction === 'woodland_alliance' && (
+                    <ActionSection>
+                      <PhaseLabel>
+                        {formatPhaseLabel(gameState.turn.phase)} Phase
+                      </PhaseLabel>
+                      <AIFactionMessage>
+                        AI-controlled faction. Click "Simulate Turn" to let the AI take an action.
+                      </AIFactionMessage>
+                      <ActionGrid>
+                        <ActionButton
+                          onClick={() => simulateFactionAction('woodland_alliance')}
+                          disabled={isSimulatingAction}
+                        >
+                          {isSimulatingAction ? 'Simulating...' : 'Simulate Action'}
+                        </ActionButton>
+                      </ActionGrid>
+                    </ActionSection>
+                  )}
+                  {/* Action detail panels for Marquise */}
                   {isPlaceWoodMode && (
                   <MarchPanel>
                     <MarchTitle>Place Wood</MarchTitle>
@@ -1395,86 +1747,37 @@ export default function Home() {
                     )}
                   </MarchPanel>
                   )}
-                  {gameState.turn.currentFaction !== 'marquise' && (
-                    <ActionSection>
-                      <DisabledMessage>Wait for Marquise de Cat&apos;s turn</DisabledMessage>
-                    </ActionSection>
-                  )}
-                  {isSimulatableFaction(gameState.turn.currentFaction) && (
-                    <ActionSection>
-                      <PhaseLabel>AI Simulation</PhaseLabel>
-                      <ActionGrid>
-                        <ActionButton
-                          onClick={() => simulateFactionAction(gameState.turn.currentFaction)}
-                          disabled={isSimulatingAction}
-                        >
-                          {isSimulatingAction
-                            ? 'Simulating...'
-                            : `Simulate ${FACTION_META[gameState.turn.currentFaction].label}`}
-                        </ActionButton>
-                      </ActionGrid>
-                    </ActionSection>
-                  )}
                 </ActionControlsColumn>
-                <ActionHistoryColumn>
-                  <ActionHistoryTitle>AI Action History</ActionHistoryTitle>
-                  <ActionHistoryList>
-                    {aiActionHistory.length === 0 ? (
-                      <ActionHistoryEmpty>No AI turns have been simulated yet.</ActionHistoryEmpty>
-                    ) : (
-                      aiActionHistory
-                        .slice()
-                        .reverse()
-                        .map(entry => (
-                          <ActionHistoryItem key={entry.id}>
-                            <ActionHistoryFaction faction={entry.faction}>
-                              {FACTION_META[entry.faction].label}
-                            </ActionHistoryFaction>
-                            <ActionHistoryAction>{entry.action}</ActionHistoryAction>
-                            <ActionHistoryReasoning>{entry.reasoning}</ActionHistoryReasoning>
-                            <ActionHistoryTimestamp>
-                              {new Date(entry.timestamp).toLocaleTimeString()}
-                            </ActionHistoryTimestamp>
-                          </ActionHistoryItem>
-                        ))
-                    )}
-                  </ActionHistoryList>
-                </ActionHistoryColumn>
               </ActionsLayout>
               </HudPanel>
               <HudPanel>
-                <HudTitle>Turn Summary</HudTitle>
-                <TurnMeta>
-                  <TurnRow>
-                    <span>Current</span>
-                    <strong>{FACTION_META[gameState.turn.currentFaction].label}</strong>
-                  </TurnRow>
-                  <TurnRow>
-                    <span>Phase</span>
-                    <strong>{gameState.turn.phase}</strong>
-                  </TurnRow>
-                  <TurnRow>
-                    <span>Round</span>
-                    <strong>{gameState.turn.roundNumber}</strong>
-                  </TurnRow>
-                  {gameState.turn.actionSubstep && (
-                    <TurnRow>
-                      <span>Substep</span>
-                      <strong>{gameState.turn.actionSubstep}</strong>
-                    </TurnRow>
+                <HudTitle>Action History</HudTitle>
+                <ActionHistoryList>
+                  {aiActionHistory.length === 0 ? (
+                    <ActionHistoryEmpty>No actions have been taken yet.</ActionHistoryEmpty>
+                  ) : (
+                    aiActionHistory
+                      .slice()
+                      .reverse()
+                      .slice(0, 10)
+                      .map(entry => (
+                        <ActionHistoryItem key={entry.id}>
+                          <ActionHistoryHeader>
+                            <ActionHistoryFaction faction={entry.faction}>
+                              {FACTION_META[entry.faction].label}
+                            </ActionHistoryFaction>
+                            <ActionHistoryTimestamp>
+                              {new Date(entry.timestamp).toLocaleTimeString()}
+                            </ActionHistoryTimestamp>
+                          </ActionHistoryHeader>
+                          <ActionHistoryAction>{entry.action}</ActionHistoryAction>
+                          {entry.reasoning && (
+                            <ActionHistoryReasoning>💭 {entry.reasoning}</ActionHistoryReasoning>
+                          )}
+                        </ActionHistoryItem>
+                      ))
                   )}
-                  <TurnRow>
-                    <span>Cats VP</span>
-                    <strong>
-                      {gameState.victoryTrack.marquise}/{VICTORY_TARGET}
-                    </strong>
-                  </TurnRow>
-                </TurnMeta>
-                <ActionButtonRow>
-                  <ActionButton onClick={advancePhase}>Advance phase</ActionButton>
-                  <ActionButton onClick={advanceFaction}>Pass turn</ActionButton>
-                  <ActionButton onClick={resetGameState}>Reset scenario</ActionButton>
-                </ActionButtonRow>
+                </ActionHistoryList>
               </HudPanel>
               <HudPanel>
                 <HudTitle>Faction Logistics</HudTitle>
@@ -1578,6 +1881,51 @@ const ScenarioHeader = styled.div`
   align-items: flex-start;
 `
 
+const HeaderLeft = styled.div`
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+`
+
+const HeaderRight = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+`
+
+const TurnInfoCompact = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 2px solid #d9c19a;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  white-space: nowrap;
+`
+
+const TurnInfoLabel = styled.span`
+  font-size: 14px;
+  font-weight: 600;
+  color: #3d2a18;
+`
+
+const TurnInfoValue = styled.span<{ color: string }>`
+  font-size: 14px;
+  font-weight: 700;
+  color: ${({ color }) => color};
+`
+
+const TurnInfoDivider = styled.span`
+  color: #d9c19a;
+  font-weight: 700;
+`
+
 const ScenarioTitle = styled.h2`
   margin: 0;
   font-size: 26px;
@@ -1672,8 +2020,7 @@ const HudTitle = styled.h3`
 
 const TurnMeta = styled.div`
   display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 6px;
 `
 
 const TurnRow = styled.div`
@@ -1690,7 +2037,7 @@ const TurnRow = styled.div`
 
 const ActionButtonRow = styled.div`
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 `
 
@@ -1699,12 +2046,12 @@ const ActionButton = styled.button`
   border-radius: 999px;
   background: #3d2a18;
   color: white;
-  padding: 6px 14px;
-  min-height: 32px;
+  padding: 5px 12px;
+  min-height: 28px;
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: 10px;
   cursor: pointer;
   transition: opacity 120ms ease, transform 120ms ease;
   display: flex;
@@ -1714,6 +2061,35 @@ const ActionButton = styled.button`
 
   :hover {
     opacity: 0.9;
+  }
+
+  :active {
+    transform: translateY(1px);
+  }
+`
+
+const GameManagerToggle = styled.button<{ active: boolean }>`
+  border: none;
+  border-radius: 999px;
+  background: ${({ active }) => (active ? '#27ae60' : '#d96a3d')};
+  color: white;
+  padding: 5px 14px;
+  min-height: 28px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 120ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  gap: 4px;
+
+  :hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
   }
 
   :active {
@@ -1778,9 +2154,29 @@ const LogisticsTags = styled.div`
 const ActionHistoryList = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  max-height: 320px;
+  gap: 10px;
+  max-height: 400px;
   overflow-y: auto;
+  padding-right: 4px;
+
+  /* Custom scrollbar */
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(61, 42, 24, 0.3);
+    border-radius: 3px;
+
+    &:hover {
+      background: rgba(61, 42, 24, 0.5);
+    }
+  }
 `
 
 const ActionHistoryItem = styled.div`
@@ -1789,36 +2185,55 @@ const ActionHistoryItem = styled.div`
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+`
+
+const ActionHistoryHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
 `
 
 const ActionHistoryFaction = styled.div<{ faction: FactionId }>`
   font-weight: 700;
+  font-size: 13px;
   color: ${({ faction }) => FACTION_META[faction].color};
+  flex: 1;
 `
 
 const ActionHistoryAction = styled.div`
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.5;
+  color: #2a170c;
+  font-weight: 500;
 `
 
 const ActionHistoryReasoning = styled.div`
   font-size: 12px;
-  color: #5f6c7b;
+  color: #6a5340;
   line-height: 1.4;
+  font-style: italic;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  border-left: 3px solid rgba(106, 83, 64, 0.3);
 `
 
 const ActionHistoryTimestamp = styled.div`
-  font-size: 11px;
+  font-size: 10px;
   color: #9aa5b1;
-  text-align: right;
+  white-space: nowrap;
+  font-weight: 500;
 `
 
 const ActionHistoryEmpty = styled.div`
   text-align: center;
-  color: #7e868c;
-  padding: 24px 0;
+  color: #9aa5b1;
+  padding: 32px 16px;
   font-size: 13px;
+  font-style: italic;
+  line-height: 1.5;
 `
 
 const ActionSection = styled.div`
@@ -1829,37 +2244,20 @@ const ActionSection = styled.div`
 
 const ActionsLayout = styled.div`
   display: flex;
-  gap: 16px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 12px;
 `
 
 const ActionControlsColumn = styled.div`
-  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
 `
 
-const ActionHistoryColumn = styled.div`
-  width: 240px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`
-
-const ActionHistoryTitle = styled.div`
-  font-size: 13px;
-  font-weight: 700;
-  color: #d96a3d;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-`
-
 const PhaseLabel = styled.div`
   font-size: 14px;
   font-weight: 700;
-  color: #d96a3d;
+  color: gray;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 2px;
@@ -1963,5 +2361,40 @@ const DefenderButton = styled.button<{ selected: boolean }>`
 
   :active {
     transform: translateY(1px);
+  }
+`
+
+const AIFactionMessage = styled.div`
+  font-size: 13px;
+  color: #5a4632;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  font-style: italic;
+  text-align: center;
+  line-height: 1.5;
+`
+
+const PlayerTurnIndicator = styled.div`
+  font-size: 13px;
+  color: #2a170c;
+  background: linear-gradient(135deg, rgba(39, 174, 96, 0.15), rgba(39, 174, 96, 0.05));
+  border: 2px solid #27ae60;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.5;
+  animation: pulse-glow 2s ease-in-out infinite;
+
+  @keyframes pulse-glow {
+    0%, 100% {
+      box-shadow: 0 0 0 rgba(39, 174, 96, 0.4);
+    }
+    50% {
+      box-shadow: 0 0 15px rgba(39, 174, 96, 0.6);
+    }
   }
 `
