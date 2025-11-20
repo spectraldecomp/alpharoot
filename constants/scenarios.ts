@@ -28,7 +28,7 @@ export const SCENARIOS: {
   },
   {
     title: 'Conquerors',
-    type: Skill.ClearingControl,
+    type: Skill.Combat,
     difficulty: 2,
     eyrieProfile: { proficiencyLevel: 'Advanced', playStyle: 'Aggressive' },
     allianceProfile: { proficiencyLevel: 'Advanced', playStyle: 'Defensive' },

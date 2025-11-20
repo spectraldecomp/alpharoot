@@ -1,7 +1,7 @@
 import { BoardDefinition } from './schema'
 
 export const BOARD_DIMENSIONS = {
-  width: 1400,
+  width: 1200,
   height: 900,
 }
 
@@ -13,7 +13,7 @@ export const WOODLAND_BOARD_DEFINITION: BoardDefinition = {
       buildingSlots: 1,
       adjacentClearings: ['c2', 'c3', 'c5'],
       x: 120,
-      y: 120,
+      y: 80,
     },
     {
       id: 'c2',
@@ -21,14 +21,14 @@ export const WOODLAND_BOARD_DEFINITION: BoardDefinition = {
       buildingSlots: 2,
       adjacentClearings: ['c1', 'c3', 'c4', 'c6'],
       x: 320,
-      y: 110,
+      y: 200,
     },
     {
       id: 'c3',
       suit: 'rabbit',
       buildingSlots: 2,
       adjacentClearings: ['c1', 'c2', 'c4', 'c6'],
-      x: 520,
+      x: 820,
       y: 130,
     },
     {
@@ -36,8 +36,8 @@ export const WOODLAND_BOARD_DEFINITION: BoardDefinition = {
       suit: 'mouse',
       buildingSlots: 2,
       adjacentClearings: ['c2', 'c3', 'c6'],
-      x: 720,
-      y: 150,
+      x: 560,
+      y: 260,
     },
     {
       id: 'c5',
@@ -52,8 +52,8 @@ export const WOODLAND_BOARD_DEFINITION: BoardDefinition = {
       suit: 'mouse',
       buildingSlots: 3,
       adjacentClearings: ['c2', 'c3', 'c4', 'c5', 'c7', 'c8'],
-      x: 520,
-      y: 360,
+      x: 560,
+      y: 460,
     },
     {
       id: 'c7',
@@ -69,7 +69,7 @@ export const WOODLAND_BOARD_DEFINITION: BoardDefinition = {
       buildingSlots: 3,
       adjacentClearings: ['c6', 'c7', 'c9', 'c11'],
       x: 600,
-      y: 600,
+      y: 640,
     },
     {
       id: 'c9',

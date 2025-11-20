@@ -34,7 +34,14 @@ export async function gptChatCompletion<Format = string>({
   const res = response.choices[0].message?.content ?? ''
 
   if (response_format) {
-    return JSON.parse(res) as Format
+    try {
+      return JSON.parse(res) as Format
+    } catch (error) {
+      console.error('[openai] JSON parse error:', error)
+      console.error('[openai] Raw response text (first 5000 chars):', res.substring(0, 5000))
+      console.error('[openai] Raw response text (around error position):', res.substring(3050, 3200))
+      throw error
+    }
   } else {
     return res as Format
   }
