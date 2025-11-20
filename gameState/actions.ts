@@ -405,6 +405,27 @@ export const executeRecruitAction = ({
 
     // Place warriors
     clearingState.warriors.marquise = (clearingState.warriors.marquise ?? 0) + warriors
+    nextState.factions.marquise.warriorsInSupply -= warriors
+  } else if (faction === 'eyrie') {
+    // Eyrie recruit logic (simplified - would need decree checking in full implementation)
+    if (nextState.factions.eyrie.warriorsInSupply < warriors) {
+      throw new Error(`Not enough warriors in supply. Need ${warriors}, have ${nextState.factions.eyrie.warriorsInSupply}`)
+    }
+    clearingState.warriors.eyrie = (clearingState.warriors.eyrie ?? 0) + warriors
+    nextState.factions.eyrie.warriorsInSupply -= warriors
+  } else if (faction === 'woodland_alliance') {
+    // Alliance recruit logic (requires base in clearing)
+    const hasBase = clearingState.buildings.some(
+      b => b.faction === 'woodland_alliance' && b.type.startsWith('base_')
+    )
+    if (!hasBase) {
+      throw new Error('Woodland Alliance can only recruit in clearings with bases')
+    }
+    if (nextState.factions.woodland_alliance.warriorsInSupply < warriors) {
+      throw new Error(`Not enough warriors in supply. Need ${warriors}, have ${nextState.factions.woodland_alliance.warriorsInSupply}`)
+    }
+    clearingState.warriors.woodland_alliance = (clearingState.warriors.woodland_alliance ?? 0) + warriors
+    nextState.factions.woodland_alliance.warriorsInSupply -= warriors
   } else {
     throw new Error(`Recruit not implemented for faction ${faction}`)
   }
@@ -434,6 +455,29 @@ export const executeTokenPlacement = ({
   if (tokenType === 'sympathy' && faction !== 'woodland_alliance') {
     throw new Error('Only the Woodland Alliance can place sympathy tokens')
   }
+  
+  // Validate wood placement for Marquise
+  if (tokenType === 'wood' && faction === 'marquise') {
+    // Check if there's wood in supply
+    if (state.factions.marquise.woodInSupply <= 0) {
+      throw new Error('No wood available in supply')
+    }
+    
+    // Check if clearing has a sawmill
+    const nextState = cloneState(state)
+    const clearingState = nextState.board.clearings[clearingId]
+    if (!clearingState) {
+      throw new Error(`Clearing ${clearingId} not found`)
+    }
+    
+    const hasSawmill = clearingState.buildings.some(
+      b => b.faction === 'marquise' && b.type === 'sawmill'
+    )
+    if (!hasSawmill) {
+      throw new Error('Wood can only be placed on clearings with sawmills')
+    }
+  }
+  
   const nextState = cloneState(state)
   const clearingState = nextState.board.clearings[clearingId]
   if (!clearingState) {

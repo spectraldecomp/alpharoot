@@ -17,6 +17,7 @@ import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatCompletionParams } from '../api/chatComplete/route'
+import { AIActionRequest, AIActionResponse } from '../api/game/aiAction/route'
 
 export type MultiPartyChat = (ChatCompletionParams['conversation'][number] & {
   faction?: 'cat' | 'alliance' | 'eyrie'
@@ -55,8 +56,18 @@ export default function Home() {
   const tutorChatRef = useRef<HTMLDivElement>(null)
   const playerChatRef = useRef<HTMLDivElement>(null)
   const [tutorConversation, setTutorConversation] = useState<ChatCompletionParams['conversation']>([
-    { role: 'assistant', content: 'Hi apprentice, I’m the Wise Cat.' },
+    { role: 'assistant', content: "Hi apprentice, I'm the Wise Cat." },
   ])
+
+  // AI action state (defined early so it can be used in tutorSystemPrompt)
+  const [aiActionLoading, setAiActionLoading] = useState(false)
+  const [aiActionSummary, setAiActionSummary] = useState<Record<FactionId, string[]>>({
+    marquise: [],
+    eyrie: [],
+    woodland_alliance: [],
+  })
+  const [selectedFactionForHistory, setSelectedFactionForHistory] = useState<FactionId | null>(null)
+
   const boardSummary = useMemo(() => summarizeGameState(gameState), [gameState])
   const tutorSystemPrompt = useMemo(
     () =>
@@ -65,8 +76,9 @@ export default function Home() {
         boardState: boardSummary,
         playerAction: lastPlayerAction,
         socialConversation: playerConversation,
+        aiActionHistory: aiActionSummary,
       }),
-    [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation]
+    [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation, aiActionSummary]
   )
 
   // March action state
@@ -88,6 +100,10 @@ export default function Home() {
   const [isRecruitMode, setIsRecruitMode] = useState(false)
   const [recruitClearing, setRecruitClearing] = useState<string | null>(null)
   const [recruitWarriorCount, setRecruitWarriorCount] = useState(1)
+
+  // Place Wood action state (Birdsong phase)
+  const [isPlaceWoodMode, setIsPlaceWoodMode] = useState(false)
+  const [placeWoodClearing, setPlaceWoodClearing] = useState<string | null>(null)
 
   const tutorChat = useCallback(async () => {
     if (loadingTutorResponse) return
@@ -168,7 +184,206 @@ export default function Home() {
   const resetGameState = useCallback(() => {
     setGameState(getScenarioGameState(scenarioIndex))
     setLastPlayerAction(`Reset to ${scenario.title}.`)
+    setAiActionSummary({
+      marquise: [],
+      eyrie: [],
+      woodland_alliance: [],
+    })
+    setSelectedFactionForHistory(null)
   }, [scenarioIndex, scenario.title])
+
+  // AI action execution
+  const executeAIAction = useCallback(
+    async (faction: FactionId) => {
+      if (aiActionLoading) return
+
+      setAiActionLoading(true)
+      const profile = faction === 'eyrie' ? scenario.eyrieProfile : scenario.allianceProfile
+
+      try {
+        // Get AI decision
+        const decisionResponse = await fetch('/api/game/aiAction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            faction,
+            gameState,
+            profile,
+          } as AIActionRequest),
+        })
+
+        if (!decisionResponse.ok) {
+          throw new Error('Failed to get AI action decision')
+        }
+
+        const decision: AIActionResponse = await decisionResponse.json()
+        const action = decision.action
+
+        // Create summary text
+        let summary = `${FACTION_META[faction].label}: ${decision.reasoning}`
+
+        // Execute action
+        if (action.type === 'pass') {
+          summary = `${FACTION_META[faction].label} passed this turn. ${decision.reasoning}`
+          setAiActionSummary(prev => ({
+            ...prev,
+            [faction]: [...prev[faction], summary],
+          }))
+          advancePhase()
+          setAiActionLoading(false)
+          return
+        }
+
+        if (action.type === 'move') {
+          const response = await fetch('/api/game/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              state: gameState,
+              faction,
+              from: action.from,
+              to: action.to,
+              warriors: action.warriors,
+            }),
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setGameState(data.state)
+            summary = `${FACTION_META[faction].label} moved ${action.warriors} warrior${
+              action.warriors > 1 ? 's' : ''
+            } from ${action.from.toUpperCase()} to ${action.to.toUpperCase()}. ${decision.reasoning}`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+            setLastPlayerAction(
+              `${FACTION_META[faction].label} moved ${action.warriors} warriors from ${action.from} to ${action.to}`
+            )
+          } else {
+            const errorData = await response.json().catch(() => ({ message: response.statusText }))
+            summary = `${FACTION_META[faction].label} attempted to move but failed: ${
+              errorData.message || errorData.error || 'Unknown error'
+            }`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+          }
+        } else if (action.type === 'battle') {
+          const response = await fetch('/api/game/battle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              state: gameState,
+              clearingId: action.clearingId,
+              attacker: faction,
+              defender: action.defender,
+            }),
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setGameState(data.state)
+            summary = `${FACTION_META[faction].label} attacked ${
+              FACTION_META[action.defender].label
+            } in ${action.clearingId.toUpperCase()}. ${decision.reasoning}`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+            setLastPlayerAction(
+              `${FACTION_META[faction].label} battled ${FACTION_META[action.defender].label} in ${action.clearingId}`
+            )
+          } else {
+            const errorData = await response.json().catch(() => ({ message: response.statusText }))
+            summary = `${FACTION_META[faction].label} attempted to battle but failed: ${
+              errorData.message || errorData.error || 'Unknown error'
+            }`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+          }
+        } else if (action.type === 'build') {
+          const response = await fetch('/api/game/build', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              state: gameState,
+              faction,
+              clearingId: action.clearingId,
+              buildingType: action.buildingType,
+            }),
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setGameState(data.state)
+            const buildingTypeName = action.buildingType || (faction === 'eyrie' ? 'roost' : 'base')
+            summary = `${
+              FACTION_META[faction].label
+            } built a ${buildingTypeName} in ${action.clearingId.toUpperCase()}. ${decision.reasoning}`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+            setLastPlayerAction(`${FACTION_META[faction].label} built in ${action.clearingId}`)
+          } else {
+            const errorData = await response.json().catch(() => ({ message: response.statusText }))
+            summary = `${FACTION_META[faction].label} attempted to build but failed: ${
+              errorData.message || errorData.error || 'Unknown error'
+            }`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+          }
+        } else if (action.type === 'recruit') {
+          const response = await fetch('/api/game/recruit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              state: gameState,
+              faction,
+              clearingId: action.clearingId,
+              warriors: action.warriors,
+            }),
+          })
+          if (response.ok) {
+            const data = await response.json()
+            setGameState(data.state)
+            summary = `${FACTION_META[faction].label} recruited ${action.warriors} warrior${
+              action.warriors > 1 ? 's' : ''
+            } in ${action.clearingId.toUpperCase()}. ${decision.reasoning}`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+            setLastPlayerAction(
+              `${FACTION_META[faction].label} recruited ${action.warriors} warriors in ${action.clearingId}`
+            )
+          } else {
+            const errorData = await response.json().catch(() => ({ message: response.statusText }))
+            const errorMessage = errorData.message || errorData.error || 'Unknown error'
+            summary = `${FACTION_META[faction].label} attempted to recruit but failed: ${errorMessage}`
+            setAiActionSummary(prev => ({
+              ...prev,
+              [faction]: [...prev[faction], summary],
+            }))
+          }
+        }
+
+        setAiActionLoading(false)
+      } catch (error) {
+        console.error('AI action error:', error)
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        setAiActionSummary(prev => ({
+          ...prev,
+          [faction]: [...prev[faction], `${FACTION_META[faction].label} encountered an error: ${errorMessage}`],
+        }))
+        setAiActionLoading(false)
+      }
+    },
+    [gameState, scenario, aiActionLoading]
+  )
 
   // March action handlers
   const toggleMarch = useCallback(() => {
@@ -698,6 +913,98 @@ export default function Home() {
     return Math.min(recruitersInClearing, gameState.factions.marquise.warriorsInSupply)
   }, [recruitClearing, gameState.board.clearings, gameState.factions.marquise.warriorsInSupply])
 
+  // Place Wood action handlers (Birdsong phase)
+  const togglePlaceWood = useCallback(() => {
+    if (isPlaceWoodMode) {
+      setIsPlaceWoodMode(false)
+      setPlaceWoodClearing(null)
+    } else {
+      // Turn on place wood mode, turn off other modes
+      setIsPlaceWoodMode(true)
+      setPlaceWoodClearing(null)
+      setIsMarchMode(false)
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
+      setIsBattleMode(false)
+      setBattleClearing(null)
+      setBattleDefender(null)
+      setBuildMode(null)
+      setBuildClearing(null)
+      setIsRecruitMode(false)
+      setRecruitClearing(null)
+      setRecruitWarriorCount(1)
+    }
+  }, [isPlaceWoodMode])
+
+  const cancelPlaceWood = useCallback(() => {
+    setIsPlaceWoodMode(false)
+    setPlaceWoodClearing(null)
+  }, [])
+
+  const handlePlaceWoodClearingClick = useCallback(
+    (clearingId: string) => {
+      if (!isPlaceWoodMode) return
+      setPlaceWoodClearing(clearingId)
+    },
+    [isPlaceWoodMode]
+  )
+
+  const executePlaceWood = useCallback(async () => {
+    if (!placeWoodClearing) return
+
+    try {
+      const response = await fetch('/api/game/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: gameState,
+          faction: 'marquise',
+          clearingId: placeWoodClearing,
+          tokenType: 'wood',
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        alert(error.error || 'Failed to place wood')
+        return
+      }
+
+      const data = await response.json()
+      setGameState(data.state)
+      setLastPlayerAction(`Placed wood in clearing ${placeWoodClearing.toUpperCase()}`)
+
+      alert(
+        `🌲 Successfully placed wood in clearing #${placeWoodClearing.toUpperCase()}\n\n` +
+          `Wood in supply: ${data.state.factions.marquise.woodInSupply}`
+      )
+
+      cancelPlaceWood()
+    } catch (error) {
+      console.error('Place wood error:', error)
+      alert('Failed to place wood')
+    }
+  }, [placeWoodClearing, gameState, cancelPlaceWood])
+
+  // Get valid clearings for placing wood (must have sawmills)
+  const validPlaceWoodClearings = useMemo(() => {
+    if (!isPlaceWoodMode || placeWoodClearing) return []
+
+    return Object.entries(gameState.board.clearings)
+      .filter(([, clearing]) => {
+        // Must have at least one sawmill
+        const hasSawmill = clearing.buildings.some(b => b.faction === 'marquise' && b.type === 'sawmill')
+        return hasSawmill && gameState.factions.marquise.woodInSupply > 0
+      })
+      .map(([id]) => id)
+  }, [isPlaceWoodMode, placeWoodClearing, gameState.board.clearings, gameState.factions.marquise.woodInSupply])
+
+  // Craft Card handler (placeholder - card system not fully implemented)
+  const handleCraftCard = useCallback(() => {
+    alert('Craft Card functionality is not yet implemented. This feature requires a card system.')
+  }, [])
+
   const logistics = useMemo(() => {
     const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
       .filter(([, planted]) => planted)
@@ -791,6 +1098,8 @@ export default function Home() {
                     ? validBuildClearings
                     : isRecruitMode
                     ? validRecruitClearings
+                    : isPlaceWoodMode
+                    ? validPlaceWoodClearings
                     : []
                 }
                 selectedClearing={
@@ -799,6 +1108,7 @@ export default function Home() {
                   battleClearing ||
                   buildClearing ||
                   recruitClearing ||
+                  placeWoodClearing ||
                   undefined
                 }
                 onClearingClick={
@@ -810,6 +1120,8 @@ export default function Home() {
                     ? handleBuildClearingClick
                     : isRecruitMode
                     ? handleRecruitClearingClick
+                    : isPlaceWoodMode
+                    ? handlePlaceWoodClearingClick
                     : () => {}
                 }
               />
@@ -824,8 +1136,10 @@ export default function Home() {
                   <ActionSection>
                     <PhaseLabel>Birdsong</PhaseLabel>
                     <ActionGrid>
-                      <ActionButton disabled>Place Wood</ActionButton>
-                      <ActionButton disabled>Craft Card</ActionButton>
+                      <ActionButton onClick={togglePlaceWood}>
+                        {isPlaceWoodMode ? 'Cancel Place Wood' : 'Place Wood'}
+                      </ActionButton>
+                      <ActionButton onClick={handleCraftCard}>Craft Card</ActionButton>
                     </ActionGrid>
                   </ActionSection>
                 )}
@@ -1044,12 +1358,130 @@ export default function Home() {
                     )}
                   </MarchPanel>
                 )}
+                {isPlaceWoodMode && (
+                  <MarchPanel>
+                    <MarchTitle>Place Wood</MarchTitle>
+                    {!placeWoodClearing && (
+                      <>
+                        <MarchInstruction>Select a clearing with a sawmill to place wood</MarchInstruction>
+                        <MarchInstruction>
+                          Wood in supply: <strong>{gameState.factions.marquise.woodInSupply}</strong>
+                        </MarchInstruction>
+                      </>
+                    )}
+                    {placeWoodClearing && (
+                      <>
+                        <MarchInstruction>
+                          Place wood in <strong>#{placeWoodClearing.toUpperCase()}</strong>
+                        </MarchInstruction>
+                        <MarchButtonRow>
+                          <ActionButton onClick={executePlaceWood}>Place Wood</ActionButton>
+                          <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
+                        </MarchButtonRow>
+                      </>
+                    )}
+                    {!placeWoodClearing && (
+                      <MarchButtonRow>
+                        <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
+                      </MarchButtonRow>
+                    )}
+                  </MarchPanel>
+                )}
                 {gameState.turn.currentFaction !== 'marquise' && (
                   <ActionSection>
-                    <DisabledMessage>Wait for Marquise de Cat&apos;s turn</DisabledMessage>
+                    {aiActionLoading ? (
+                      <DisabledMessage>
+                        {FACTION_META[gameState.turn.currentFaction].label} is thinking...
+                      </DisabledMessage>
+                    ) : (
+                      <>
+                        <DisabledMessage>
+                          {FACTION_META[gameState.turn.currentFaction].label}&apos;s turn
+                        </DisabledMessage>
+                        <ActionButtonRow>
+                          <ActionButton
+                            onClick={() => executeAIAction(gameState.turn.currentFaction)}
+                            disabled={aiActionLoading}
+                          >
+                            Execute {FACTION_META[gameState.turn.currentFaction].label} Action
+                          </ActionButton>
+                        </ActionButtonRow>
+                      </>
+                    )}
                   </ActionSection>
                 )}
               </HudPanel>
+              {(aiActionSummary.eyrie.length > 0 ||
+                aiActionSummary.woodland_alliance.length > 0 ||
+                aiActionLoading) && (
+                <HudPanel>
+                  <FactionHistoryHeader
+                    onClick={() => {
+                      const hasHistory =
+                        aiActionSummary.eyrie.length > 0 || aiActionSummary.woodland_alliance.length > 0
+                      if (hasHistory) {
+                        setSelectedFactionForHistory(prev => {
+                          if (prev === null) {
+                            // If not expanded, expand and show first available faction
+                            return aiActionSummary.eyrie.length > 0 ? 'eyrie' : 'woodland_alliance'
+                          }
+                          return null // Collapse
+                        })
+                      }
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <HudTitle style={{ margin: 0 }}>
+                      AI Action History
+                      {(aiActionSummary.eyrie.length > 0 || aiActionSummary.woodland_alliance.length > 0) && (
+                        <span style={{ marginLeft: '8px', fontSize: '11px', opacity: 0.7 }}>
+                          ({aiActionSummary.eyrie.length + aiActionSummary.woodland_alliance.length})
+                        </span>
+                      )}
+                    </HudTitle>
+                    <ExpandIcon>{selectedFactionForHistory !== null ? '▼' : '▶'}</ExpandIcon>
+                  </FactionHistoryHeader>
+                  {selectedFactionForHistory !== null && (
+                    <FactionHistoryContent>
+                      <FactionSelector>
+                        <FactionSelectorLabel>View:</FactionSelectorLabel>
+                        <FactionSelectorButtons>
+                          {(['eyrie', 'woodland_alliance'] as FactionId[]).map(faction => {
+                            const history = aiActionSummary[faction]
+                            if (
+                              history.length === 0 &&
+                              !(gameState.turn.currentFaction === faction && aiActionLoading)
+                            ) {
+                              return null
+                            }
+                            return (
+                              <FactionSelectorButton
+                                key={faction}
+                                onClick={() => setSelectedFactionForHistory(faction)}
+                                selected={selectedFactionForHistory === faction}
+                              >
+                                {FACTION_META[faction].label} ({history.length})
+                              </FactionSelectorButton>
+                            )
+                          })}
+                        </FactionSelectorButtons>
+                      </FactionSelector>
+                      {selectedFactionForHistory && (
+                        <>
+                          {aiActionSummary[selectedFactionForHistory].slice(-10).map((summary, i) => (
+                            <FactionHistoryItem key={i}>{summary}</FactionHistoryItem>
+                          ))}
+                          {gameState.turn.currentFaction === selectedFactionForHistory && aiActionLoading && (
+                            <FactionHistoryItem style={{ fontStyle: 'italic', color: '#666' }}>
+                              Thinking...
+                            </FactionHistoryItem>
+                          )}
+                        </>
+                      )}
+                    </FactionHistoryContent>
+                  )}
+                </HudPanel>
+              )}
               <HudPanel>
                 <HudTitle>Turn Summary</HudTitle>
                 <TurnMeta>
@@ -1381,6 +1813,81 @@ const LogisticsTags = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+`
+
+const FactionHistoryHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(61, 42, 24, 0.05);
+  border-bottom: 1px solid rgba(61, 42, 24, 0.1);
+  transition: background 0.2s;
+
+  &:hover {
+    background: rgba(61, 42, 24, 0.1);
+  }
+`
+
+const ExpandIcon = styled.span`
+  font-size: 10px;
+  color: #6a5340;
+  transition: transform 0.2s;
+`
+
+const FactionHistoryContent = styled.div`
+  padding: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+`
+
+const FactionSelector = styled.div`
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(61, 42, 24, 0.15);
+`
+
+const FactionSelectorLabel = styled.div`
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a3520;
+  margin-bottom: 6px;
+`
+
+const FactionSelectorButtons = styled.div`
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+`
+
+const FactionSelectorButton = styled.button<{ selected: boolean }>`
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(61, 42, 24, 0.3);
+  border-radius: 6px;
+  background: ${({ selected }) => (selected ? 'rgba(61, 42, 24, 0.15)' : 'rgba(255, 255, 255, 0.8)')};
+  color: ${({ selected }) => (selected ? '#2a170c' : '#4a3520')};
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: ${({ selected }) => (selected ? 'rgba(61, 42, 24, 0.2)' : 'rgba(61, 42, 24, 0.1)')};
+  }
+`
+
+const FactionHistoryItem = styled.div`
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+  color: #4a3520;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(61, 42, 24, 0.05);
+
+  &:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+  }
 `
 
 const ActionSection = styled.div`

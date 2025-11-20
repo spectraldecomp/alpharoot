@@ -8,6 +8,7 @@ type TutorPromptArgs = {
   boardState: GameInfoSummary
   playerAction?: string
   socialConversation: MultiPartyChat
+  aiActionHistory?: Record<FactionId, string[]>
 }
 
 const FACTION_LABELS: Record<FactionId, string> = {
@@ -106,8 +107,38 @@ const formatConversation = (conversation: MultiPartyChat) => {
     .join('\n')
 }
 
+const formatAIActionHistory = (aiActionHistory?: Record<FactionId, string[]>) => {
+  if (!aiActionHistory) return 'No AI action history available yet.'
+  
+  const eyrieHistory = aiActionHistory.eyrie || []
+  const allianceHistory = aiActionHistory.woodland_alliance || []
+  
+  if (eyrieHistory.length === 0 && allianceHistory.length === 0) {
+    return 'No AI actions have been taken yet.'
+  }
+  
+  const lines: string[] = []
+  
+  if (eyrieHistory.length > 0) {
+    lines.push('Eyrie Dynasties Actions:')
+    eyrieHistory.slice(-5).forEach(action => {
+      lines.push(`  - ${action}`)
+    })
+  }
+  
+  if (allianceHistory.length > 0) {
+    if (lines.length > 0) lines.push('')
+    lines.push('Woodland Alliance Actions:')
+    allianceHistory.slice(-5).forEach(action => {
+      lines.push(`  - ${action}`)
+    })
+  }
+  
+  return lines.join('\n')
+}
+
 // high-level, generic tutor prompt, updated at runtime with board context
-export const TUTOR_SYSTEM_PROMPT = ({ profile, boardState, playerAction, socialConversation }: TutorPromptArgs) =>
+export const TUTOR_SYSTEM_PROMPT = ({ profile, boardState, playerAction, socialConversation, aiActionHistory }: TutorPromptArgs) =>
   `
 You are a patient and experienced tutor helping an apprentice learn Root, an asymmetric strategy board game set in a woodland realm.
 
@@ -125,6 +156,9 @@ ${formatPlayerAction(playerAction)}
 
 ### Table Talk Highlights
 ${formatConversation(socialConversation)}
+
+### AI Faction Actions
+${formatAIActionHistory(aiActionHistory)}
 
 ## Your Role & Teaching Philosophy
 
