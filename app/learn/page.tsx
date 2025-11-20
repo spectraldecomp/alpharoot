@@ -35,11 +35,11 @@ const formatPhaseLabel = (phase: GameState['turn']['phase']) => phase.charAt(0).
 
 export default function Home() {
   const searchParams = useSearchParams()
-  const scenarioIndexParam = Number(searchParams.get('scenario') ?? 0)
-  const scenarioIndex = Number.isNaN(scenarioIndexParam)
-    ? 0
-    : Math.min(Math.max(scenarioIndexParam, 0), SCENARIOS.length - 1)
-  const scenario = SCENARIOS[scenarioIndex]
+  const scenarioIndex = Number(searchParams.get('scenario') ?? 0)
+  const scenario =
+    scenarioIndex < 0
+      ? (JSON.parse(localStorage.getItem('customScenario') ?? '') as (typeof SCENARIOS)[number])
+      : SCENARIOS[scenarioIndex]
   const [tutorChatComplete, { isLoading: loadingTutorResponse }] = useChatCompleteMutation()
   const {
     playerConversation,
@@ -61,12 +61,11 @@ export default function Home() {
   const tutorSystemPrompt = useMemo(
     () =>
       TUTOR_SYSTEM_PROMPT({
-        profile: scenario.playerProfile,
         boardState: boardSummary,
         playerAction: lastPlayerAction,
         socialConversation: playerConversation,
       }),
-    [scenario.playerProfile, boardSummary, lastPlayerAction, playerConversation]
+    [boardSummary, lastPlayerAction, playerConversation]
   )
 
   // March action state

@@ -1,10 +1,8 @@
 import { MultiPartyChat } from '@/app/learn/page'
-import { PlayerProfile } from '@/constants/scenarios'
 import { GameInfoSummary } from '@/gameState/actions'
 import { FactionId } from '@/gameState/schema'
 
 type TutorPromptArgs = {
-  profile: PlayerProfile
   boardState: GameInfoSummary
   playerAction?: string
   socialConversation: MultiPartyChat
@@ -16,10 +14,7 @@ const FACTION_LABELS: Record<FactionId, string> = {
   woodland_alliance: 'Woodland Alliance',
 }
 
-const toLabel = (value: string) =>
-  value
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, char => char.toUpperCase())
+const toLabel = (value: string) => value.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
 
 const formatResources = (resources: GameInfoSummary['factionSupplies'][number]['resources']) => {
   const entries = Object.entries(resources)
@@ -52,27 +47,28 @@ const formatBoardSummary = (summary: GameInfoSummary) => {
   const supplyLines = summary.factionSupplies
     .map(
       supply =>
-        `- ${FACTION_LABELS[supply.faction]} · Warriors ${supply.warriors}, ${formatResources(supply.resources)}`,
+        `- ${FACTION_LABELS[supply.faction]} · Warriors ${supply.warriors}, ${formatResources(supply.resources)}`
     )
     .join('\n')
 
   const hotspotLines =
     summary.clearings
       .filter(
-        clearing =>
-          Object.keys(clearing.warriors ?? {}).length || clearing.buildings.length || clearing.tokens.length,
+        clearing => Object.keys(clearing.warriors ?? {}).length || clearing.buildings.length || clearing.tokens.length
       )
       .slice(0, 5)
       .map(
         clearing =>
           `- ${clearing.id.toUpperCase()} (${toLabel(clearing.suit)}): Warriors ${formatWarriors(
-            clearing.warriors,
-          )} | Buildings ${formatPieces(clearing.buildings)} | Tokens ${formatPieces(clearing.tokens)}`,
+            clearing.warriors
+          )} | Buildings ${formatPieces(clearing.buildings)} | Tokens ${formatPieces(clearing.tokens)}`
       )
       .join('\n') || '- No contested clearings yet.'
 
   return [
-    `Turn · ${FACTION_LABELS[summary.turn.currentFaction]} ${toLabel(summary.turn.phase)} (Round ${summary.turn.roundNumber})`,
+    `Turn · ${FACTION_LABELS[summary.turn.currentFaction]} ${toLabel(summary.turn.phase)} (Round ${
+      summary.turn.roundNumber
+    })`,
     `Victory · Cats ${summary.victoryTrack.marquise} | Eyrie ${summary.victoryTrack.eyrie} | Alliance ${summary.victoryTrack.woodland_alliance}`,
     'Supplies:',
     supplyLines,
@@ -107,15 +103,11 @@ const formatConversation = (conversation: MultiPartyChat) => {
 }
 
 // high-level, generic tutor prompt, updated at runtime with board context
-export const TUTOR_SYSTEM_PROMPT = ({ profile, boardState, playerAction, socialConversation }: TutorPromptArgs) =>
+export const TUTOR_SYSTEM_PROMPT = ({ boardState, playerAction, socialConversation }: TutorPromptArgs) =>
   `
 You are a patient and experienced tutor helping an apprentice learn Root, an asymmetric strategy board game set in a woodland realm.
 
 ## Live Scenario Context
-
-### Learner Profile
-- Proficiency Level: ${profile.proficiencyLevel}
-- Play Style: ${profile.playStyle}
 
 ### Board State Snapshot
 ${formatBoardSummary(boardState)}

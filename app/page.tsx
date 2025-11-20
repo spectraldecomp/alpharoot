@@ -1,10 +1,15 @@
 'use client'
 import { SCENARIOS } from '@/constants/scenarios'
 import styled from '@emotion/styled'
+import { Metamorphous } from 'next/font/google'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 
 const DIFFICULTIES = ['Easy', 'Medium', 'Hard']
+
+const metamorphous = Metamorphous({
+  weight: '400',
+})
 
 export default function Home() {
   const { push } = useRouter()
@@ -14,19 +19,16 @@ export default function Home() {
       <Container>
         {SCENARIOS.map(({ title, type, difficulty }, i) => (
           <Card key={i} onClick={() => push(`/learn?scenario=${i}`)}>
-            <Image
-              src={`/image/root${i + 1}.png`}
-              fill={true}
-              style={{ objectFit: 'cover', position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-              alt=""
-            />
+            <CardImage src={`/image/root${(i % 3) + 1}.png`} fill={true} alt="" />
             <DifficultyTag>{DIFFICULTIES[difficulty]}</DifficultyTag>
-            <Title>
-              <Tag>{type}</Tag>
-              {title}
-            </Title>
+            <Tag>{type}</Tag>
+            <Title className={metamorphous.className}>{title}</Title>
           </Card>
         ))}
+        <Card onClick={() => push('/create')}>
+          <CardImage src={`/image/root4.png`} fill={true} alt="" />
+          <Title className={metamorphous.className}>Create Your Own Scenario!</Title>
+        </Card>
       </Container>
     </main>
   )
@@ -51,12 +53,14 @@ const Title = styled.div`
   z-index: 1;
   bottom: 16px;
   left: 16px;
-  background-color: rgba(255, 255, 255, 0.6);
+  background-color: rgba(255, 255, 255, 0.7);
   padding: 4px 12px;
   font-weight: bold;
   text-align: left;
   font-size: 24px;
-  width: calc(100% - 32px);
+  max-width: calc(100% - 32px);
+  pointer-events: none;
+  text-align: center;
 `
 
 const Container = styled.div`
@@ -72,6 +76,23 @@ const Tag = styled.div`
   color: white;
   font-size: 12px;
   width: fit-content;
+  position: absolute;
+  top: 16px;
+  left: 16px;
+`
+
+const CardImage = styled(Image)`
+  object-fit: cover;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+
+  :hover {
+    transform: scale(1.1);
+    transition: transform 0.3s ease;
+  }
 `
 
 const DifficultyTag = styled.div`

@@ -191,7 +191,7 @@ export const recomputeDerivedGameState = (state: GameState) => {
   state.factions.eyrie.warriorsInSupply = Math.max(0, EYRIE_TOTAL_WARRIORS - warriorsOnMap.eyrie)
   state.factions.woodland_alliance.warriorsInSupply = Math.max(
     0,
-    WOODLAND_ALLIANCE_TOTAL_WARRIORS - warriorsOnMap.woodland_alliance,
+    WOODLAND_ALLIANCE_TOTAL_WARRIORS - warriorsOnMap.woodland_alliance
   )
 
   state.factions.marquise.woodInSupply = Math.max(0, MARQUISE_TOTAL_WOOD - woodOnBoard)
@@ -202,7 +202,7 @@ const applyScenarioCommon = (
   overrides?: {
     turn?: Partial<GameState['turn']>
     victoryTrack?: Partial<GameState['victoryTrack']>
-  },
+  }
 ): GameState => {
   const state = createBaseGameState()
   mutator(state)
@@ -224,7 +224,7 @@ const applyScenarioCommon = (
 const addDecreeCard = (
   state: GameState,
   column: DecreeColumn,
-  card: Pick<DecreeCard, 'suit' | 'source'> & { id?: string },
+  card: Pick<DecreeCard, 'suit' | 'source'> & { id?: string }
 ) => {
   state.factions.eyrie.decree.columns[column].push({
     id: card.id ?? `${column}_${card.suit}_${state.factions.eyrie.decree.columns[column].length}`,
@@ -271,7 +271,7 @@ const buildEyrieDominionState: ScenarioBuilder = () =>
     {
       turn: { currentFaction: 'eyrie', phase: 'daylight', roundNumber: 3 },
       victoryTrack: { marquise: 11, eyrie: 14, woodland_alliance: 6 },
-    },
+    }
   )
 
 const buildMartialLawState: ScenarioBuilder = () =>
@@ -314,7 +314,7 @@ const buildMartialLawState: ScenarioBuilder = () =>
     {
       turn: { currentFaction: 'marquise', phase: 'daylight', roundNumber: 4, actionSubstep: 'recruit' },
       victoryTrack: { marquise: 17, eyrie: 8, woodland_alliance: 5 },
-    },
+    }
   )
 
 const buildConquerorsState: ScenarioBuilder = () =>
@@ -363,7 +363,7 @@ const buildConquerorsState: ScenarioBuilder = () =>
     {
       turn: { currentFaction: 'woodland_alliance', phase: 'daylight', roundNumber: 5, actionSubstep: 'craft' },
       victoryTrack: { marquise: 20, eyrie: 19, woodland_alliance: 16 },
-    },
+    }
   )
 
 const scenarioBuilders: Record<number, ScenarioBuilder> = {
@@ -373,8 +373,12 @@ const scenarioBuilders: Record<number, ScenarioBuilder> = {
 }
 
 export const getScenarioGameState = (scenarioIndex: number): GameState => {
-  const builder = scenarioBuilders[scenarioIndex] ?? buildEyrieDominionState
-  return builder()
+  if (scenarioIndex < 0) {
+    return JSON.parse(localStorage.getItem('customGameState') ?? '') as GameState
+  } else {
+    const builder = scenarioBuilders[scenarioIndex] ?? buildEyrieDominionState
+    return builder()
+  }
 }
 
 export const getNextPhase = (phase: Phase): Phase => {
@@ -388,4 +392,3 @@ export const getNextFaction = (faction: FactionId): FactionId => {
   const nextIndex = (currentIndex + 1) % factionOrder.length
   return factionOrder[nextIndex]
 }
-
