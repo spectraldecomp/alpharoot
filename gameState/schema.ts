@@ -148,6 +148,7 @@ export interface EyrieState {
   decree: DecreeState
   roostTrack: RoostTrackStatus
   roostsOnMap: number
+  handSize: number
 }
 
 export interface SympathyTrackStep {
@@ -174,6 +175,12 @@ export interface WoodlandAllianceState {
   officers: number
   sympathyTrack: SympathyTrackStatus
   sympathyOnMap: number
+  supporters: {
+    mouse: number
+    rabbit: number
+    fox: number
+    bird: number
+  }
 }
 
 export const MARQUISE_TOTAL_WARRIORS = 25

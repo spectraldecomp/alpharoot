@@ -2,18 +2,25 @@ import { WOODLAND_BOARD_DEFINITION } from './boardDefinition'
 import {
   BuildingInstance,
   BuildingType,
+  DecreeCard,
   DecreeColumn,
   FactionId,
   GameState,
   MARQUISE_BUILDING_TRACKS,
+  Suit,
   TokenInstance,
   TokenType,
+  DEFAULT_ROOST_TRACK,
+  DECREE_COLUMNS,
+  DEFAULT_SYMPATHY_TRACK,
 } from './schema'
 import { recomputeDerivedGameState } from './scenarioState'
 
 const cloneState = (state: GameState): GameState => JSON.parse(JSON.stringify(state)) as GameState
 
 const clearingIndex = new Map(WOODLAND_BOARD_DEFINITION.clearings.map(clearing => [clearing.id, clearing]))
+
+const SYMPATHY_SPREAD_COST = [1, 1, 2, 2, 2, 3, 3, 3, 4, 4]
 
 const assertClearingExists = (id: string) => {
   const clearing = clearingIndex.get(id)
@@ -43,6 +50,14 @@ const ensureBuildingSlot = (state: GameState, clearingId: string) => {
 }
 
 const nextId = (prefix: string, existing: number) => `${prefix}_${Date.now()}_${existing}`
+
+const addDecreeCard = (state: GameState, column: DecreeColumn, card: Omit<DecreeCard, 'id'> & { id?: string }) => {
+  state.factions.eyrie.decree.columns[column].push({
+    id: card.id ?? nextId(`decree_${column}`, state.factions.eyrie.decree.columns[column].length),
+    suit: card.suit,
+    source: card.source,
+  })
+}
 
 export type MoveActionRequest = {
   state: GameState
@@ -355,14 +370,19 @@ export const executeBuildAction = ({
 export type RecruitActionRequest = {
   state: GameState
   faction: FactionId
+  clearingId?: string
+  warriors?: number
+}
+
+export type RecruitPlacement = {
   clearingId: string
-  warriors: number
+  warriorsPlaced: number
 }
 
 export type RecruitActionResponse = {
   state: GameState
-  warriorsPlaced: number
-  clearingId: string
+  placements: RecruitPlacement[]
+  totalPlaced: number
 }
 
 export const executeRecruitAction = ({
@@ -371,46 +391,99 @@ export const executeRecruitAction = ({
   clearingId,
   warriors,
 }: RecruitActionRequest): RecruitActionResponse => {
-  if (warriors <= 0) {
-    throw new Error('Must recruit at least one warrior')
-  }
-
   const nextState = cloneState(state)
-  const clearingState = nextState.board.clearings[clearingId]
-  
-  if (!clearingState) {
-    throw new Error(`Clearing ${clearingId} not found`)
-  }
+  const placements: RecruitPlacement[] = []
 
-  // Marquise-specific recruit rules
   if (faction === 'marquise') {
-    // Check for recruiters in the clearing
-    const recruitersInClearing = clearingState.buildings.filter(
-      b => b.faction === 'marquise' && b.type === 'recruiter'
-    ).length
+    const recruiterEntries = Object.entries(nextState.board.clearings).filter(([, clearing]) =>
+      clearing.buildings.some(b => b.faction === 'marquise' && b.type === 'recruiter'),
+    )
 
-    if (recruitersInClearing === 0) {
-      throw new Error('No recruiters in this clearing')
+    if (recruiterEntries.length === 0) {
+      throw new Error('No recruiters on the map. Build a recruiter before recruiting.')
     }
 
-    // Can only recruit up to the number of recruiters
-    if (warriors > recruitersInClearing) {
-      throw new Error(`Can only recruit ${recruitersInClearing} warrior(s) (one per recruiter)`)
+    let available = nextState.factions.marquise.warriorsInSupply
+    if (available <= 0) {
+      throw new Error('No warriors left in supply.')
     }
 
-    // Check if enough warriors in supply
-    if (nextState.factions.marquise.warriorsInSupply < warriors) {
-      throw new Error(`Not enough warriors in supply. Need ${warriors}, have ${nextState.factions.marquise.warriorsInSupply}`)
+    recruiterEntries.forEach(([id, clearing]) => {
+      if (available <= 0) {
+        return
+      }
+      const recruitersInClearing = clearing.buildings.filter(
+        b => b.faction === 'marquise' && b.type === 'recruiter',
+      ).length
+      if (recruitersInClearing === 0) {
+        return
+      }
+      const toPlace = Math.min(recruitersInClearing, available)
+      clearing.warriors.marquise = (clearing.warriors.marquise ?? 0) + toPlace
+      placements.push({ clearingId: id, warriorsPlaced: toPlace })
+      available -= toPlace
+    })
+  } else if (faction === 'eyrie') {
+    let targetClearingId = clearingId
+    if (!targetClearingId) {
+      const fallback = Object.entries(nextState.board.clearings).find(([, clearing]) =>
+        clearing.buildings.some(b => b.faction === 'eyrie' && b.type === 'roost'),
+      )
+      if (!fallback) {
+        throw new Error('Eyrie have no roosts to recruit from.')
+      }
+      targetClearingId = fallback[0]
     }
-
-    // Place warriors
-    clearingState.warriors.marquise = (clearingState.warriors.marquise ?? 0) + warriors
+    const clearingState = nextState.board.clearings[targetClearingId]
+    if (!clearingState) {
+      throw new Error(`Clearing ${targetClearingId} not found`)
+    }
+    const hasRoost = clearingState.buildings.some(b => b.faction === 'eyrie' && b.type === 'roost')
+    if (!hasRoost) {
+      throw new Error('Eyrie can only recruit in clearings with a roost.')
+    }
+    const available = nextState.factions.eyrie.warriorsInSupply
+    if (available <= 0) {
+      throw new Error('No Eyrie warriors left in supply.')
+    }
+    const toPlace = Math.min(Math.max(1, warriors ?? 1), available)
+    clearingState.warriors.eyrie = (clearingState.warriors.eyrie ?? 0) + toPlace
+    placements.push({ clearingId: targetClearingId, warriorsPlaced: toPlace })
+  } else if (faction === 'woodland_alliance') {
+    if (!clearingId) {
+      throw new Error('Woodland Alliance recruits must specify a base clearing.')
+    }
+    const clearingState = nextState.board.clearings[clearingId]
+    if (!clearingState) {
+      throw new Error(`Clearing ${clearingId} not found`)
+    }
+    const hasBase = clearingState.buildings.some(
+      b => b.faction === 'woodland_alliance' && b.type.startsWith('base_'),
+    )
+    if (!hasBase) {
+      throw new Error('Alliance can only recruit in clearings with one of their bases.')
+    }
+    const available = nextState.factions.woodland_alliance.warriorsInSupply
+    if (available <= 0) {
+      throw new Error('No Woodland Alliance warriors left in supply.')
+    }
+    const toPlace = 1
+    clearingState.warriors.woodland_alliance = (clearingState.warriors.woodland_alliance ?? 0) + toPlace
+    placements.push({ clearingId, warriorsPlaced: toPlace })
   } else {
     throw new Error(`Recruit not implemented for faction ${faction}`)
   }
 
+  if (placements.length === 0) {
+    throw new Error('Recruit action could not place any warriors.')
+  }
+
   recomputeDerivedGameState(nextState)
-  return { state: nextState, warriorsPlaced: warriors, clearingId }
+  return {
+    state: nextState,
+    placements,
+    totalPlaced: placements.reduce((sum, entry) => sum + entry.warriorsPlaced, 0),
+  }
 }
 
 export type TokenActionRequest = {
@@ -438,6 +511,58 @@ export const executeTokenPlacement = ({
   const clearingState = nextState.board.clearings[clearingId]
   if (!clearingState) {
     throw new Error(`Clearing ${clearingId} not found`)
+  }
+  if (
+    faction === 'woodland_alliance' &&
+    tokenType === 'sympathy' &&
+    clearingState.tokens.some(token => token.faction === 'woodland_alliance' && token.type === 'sympathy')
+  ) {
+    throw new Error('Clearing already has a sympathy token')
+  }
+
+  if (faction === 'woodland_alliance' && tokenType === 'sympathy') {
+    const clearingDefinition = assertClearingExists(clearingId)
+    const supporters = nextState.factions.woodland_alliance.supporters
+    const tokensPlaced = nextState.factions.woodland_alliance.sympathyTrack.sympathyPlaced
+    const baseCost = SYMPATHY_SPREAD_COST[Math.min(tokensPlaced, SYMPATHY_SPREAD_COST.length - 1)]
+    const hasMartialLaw = Object.entries(clearingState.warriors).some(
+      ([factionId, count]) => factionId !== 'woodland_alliance' && (count ?? 0) >= 3,
+    )
+    const requiredSupporters = baseCost + (hasMartialLaw ? 1 : 0)
+    const targetSuit: keyof typeof supporters =
+      clearingDefinition.suit === 'mouse' ||
+      clearingDefinition.suit === 'rabbit' ||
+      clearingDefinition.suit === 'fox'
+        ? (clearingDefinition.suit as 'mouse' | 'rabbit' | 'fox')
+        : 'bird'
+    const spendSupporters = (suit: keyof typeof supporters, amount: number) => {
+      if (amount <= 0) return
+      if (supporters[suit] < amount) {
+        throw new Error('Not enough supporters to spread sympathy in that clearing.')
+      }
+      supporters[suit] -= amount
+    }
+    if (requiredSupporters > 0) {
+      if (targetSuit === 'bird') {
+        spendSupporters('bird', requiredSupporters)
+      } else {
+        const primary = Math.min(requiredSupporters, supporters[targetSuit])
+        spendSupporters(targetSuit, primary)
+        const remainder = requiredSupporters - primary
+        if (remainder > 0) {
+          spendSupporters('bird', remainder)
+        }
+      }
+    }
+
+    const sympathyIndex = Math.min(
+      DEFAULT_SYMPATHY_TRACK.steps.length - 1,
+      nextState.factions.woodland_alliance.sympathyTrack.sympathyPlaced,
+    )
+    const vp = DEFAULT_SYMPATHY_TRACK.steps[sympathyIndex]?.victoryPoints ?? 0
+    if (vp > 0) {
+      nextState.victoryTrack.woodland_alliance = Math.min(30, nextState.victoryTrack.woodland_alliance + vp)
+    }
   }
   const token: TokenInstance = {
     id: nextId(`${faction}_${tokenType}_${clearingId}`, clearingState.tokens.length),
@@ -482,9 +607,124 @@ export const executePlaceWoodAction = ({ state, clearingId }: PlaceWoodActionReq
   }
 
   clearingState.tokens.push(token)
+  nextState.factions.marquise.woodInSupply = Math.max(0, nextState.factions.marquise.woodInSupply - 1)
   recomputeDerivedGameState(nextState)
 
   return { state: nextState, token }
+}
+
+export const performEyrieBirdsong = (state: GameState): { state: GameState; log: string[] } => {
+  const nextState = cloneState(state)
+  const log: string[] = []
+  const eyrie = nextState.factions.eyrie
+  const nonBirdSuits: Suit[] = ['fox', 'rabbit', 'mouse']
+
+  if (eyrie.handSize <= 0) {
+    eyrie.handSize = 1
+    log.push('Emergency Orders: drew 1 card.')
+  }
+
+  let cardsAdded = 0
+  const cardsToAdd = Math.min(2, eyrie.handSize)
+  let birdAdded = false
+  for (let i = 0; i < cardsToAdd; i += 1) {
+    const targetColumn = DECREE_COLUMNS.reduce((best, column) => {
+      if (!best) return column
+      const length = eyrie.decree.columns[column].length
+      const bestLength = eyrie.decree.columns[best].length
+      if (length < bestLength) return column
+      return best
+    }, DECREE_COLUMNS[0])
+
+    let suit: Suit
+    if (!birdAdded) {
+      suit = 'bird'
+      birdAdded = true
+    } else {
+      const idx = (cardsAdded - 1) % nonBirdSuits.length
+      suit = nonBirdSuits[idx]
+    }
+
+    addDecreeCard(nextState, targetColumn, { suit, source: 'normal' })
+    eyrie.handSize = Math.max(0, eyrie.handSize - 1)
+    cardsAdded += 1
+    log.push(`Added a ${suit} card to the ${targetColumn} column of the Decree.`)
+  }
+
+  if (eyrie.roostsOnMap === 0) {
+    const candidate = Object.entries(nextState.board.clearings)
+      .map(([id, clearing]) => {
+        const totalWarriors = Object.values(clearing.warriors).reduce((sum, value) => sum + (value ?? 0), 0)
+        return { id, clearing, totalWarriors }
+      })
+      .filter(entry => {
+        const clearingDef = assertClearingExists(entry.id)
+        return entry.clearing.buildings.length < clearingDef.buildingSlots
+      })
+      .sort((a, b) => a.totalWarriors - b.totalWarriors)[0]
+
+    if (candidate) {
+      const targetClearing = nextState.board.clearings[candidate.id]
+      const building: BuildingInstance = {
+        id: nextId(`eyrie_roost_${candidate.id}`, targetClearing.buildings.length),
+        faction: 'eyrie',
+        type: 'roost',
+        slotIndex: targetClearing.buildings.length,
+      }
+      targetClearing.buildings.push(building)
+      const warriorsToPlace = Math.min(3, eyrie.warriorsInSupply)
+      targetClearing.warriors.eyrie = (targetClearing.warriors.eyrie ?? 0) + warriorsToPlace
+      log.push(`A New Roost: placed a roost with ${warriorsToPlace} warriors in ${candidate.id.toUpperCase()}.`)
+    }
+  }
+
+  recomputeDerivedGameState(nextState)
+  if (cardsAdded === 0 && log.length === 0) {
+    log.push('Birdsong complete: no changes required.')
+  }
+  return { state: nextState, log }
+}
+
+export const performEyrieEvening = (state: GameState): { state: GameState; log: string[] } => {
+  const nextState = cloneState(state)
+  const log: string[] = []
+  const eyrie = nextState.factions.eyrie
+  const roostIndex = Math.min(
+    DEFAULT_ROOST_TRACK.steps.length - 1,
+    Math.max(0, eyrie.roostTrack.roostsPlaced),
+  )
+  const vp = DEFAULT_ROOST_TRACK.steps[roostIndex]?.victoryPoints ?? 0
+  if (vp > 0) {
+    nextState.victoryTrack.eyrie = Math.min(30, nextState.victoryTrack.eyrie + vp)
+    log.push(`Scored ${vp} VP from roost track (total ${nextState.victoryTrack.eyrie}).`)
+  } else {
+    log.push('Scored 0 VP from roost track.')
+  }
+
+  eyrie.handSize += 1
+  log.push(`Drew 1 card in Evening (hand size ${eyrie.handSize}).`)
+  recomputeDerivedGameState(nextState)
+  return { state: nextState, log }
+}
+
+export const triggerEyrieTurmoil = (state: GameState): { state: GameState; lostPoints: number } => {
+  const nextState = cloneState(state)
+  const eyrie = nextState.factions.eyrie
+  const birdCards = DECREE_COLUMNS.reduce(
+    (sum, column) =>
+      sum +
+      eyrie.decree.columns[column].filter(card => card.suit === 'bird').length,
+    0,
+  )
+  if (birdCards > 0) {
+    nextState.victoryTrack.eyrie = Math.max(0, nextState.victoryTrack.eyrie - birdCards)
+  }
+  DECREE_COLUMNS.forEach(column => {
+    eyrie.decree.columns[column] = eyrie.decree.columns[column].filter(card => card.source === 'vizier')
+  })
+  nextState.turn.phase = 'evening'
+  recomputeDerivedGameState(nextState)
+  return { state: nextState, lostPoints: birdCards }
 }
 
 export type GameInfoSummary = {

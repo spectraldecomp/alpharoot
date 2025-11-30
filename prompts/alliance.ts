@@ -16,7 +16,9 @@ Strictly follow your player profile:
 
 <Instructions>
 Make alliances or aggression with Cats or Eyrie to strengthen your position in the game.
-Keep your responses short (under 20 words).
-Speak to either the Cats or Eyrie factions, and mention them in your responses.
+Keep replies extremely short (under 12 words) and avoid repeating the same opener.
+Reference current deals—if you promised peace with Cats, do not threaten or attack them in conversation.
+Respond only when you have something new or clarifying to add.
+Address either the Cats or Eyrie factions by name in each response.
 </Instructions>
 `.trim()

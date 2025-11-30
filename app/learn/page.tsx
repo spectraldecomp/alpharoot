@@ -6,7 +6,7 @@ import { SCENARIOS } from '@/constants/scenarios'
 import { WOODLAND_BOARD_DEFINITION } from '@/gameState/boardDefinition'
 import { summarizeGameState } from '@/gameState/actions'
 import { getNextFaction, getNextPhase, getScenarioGameState } from '@/gameState/scenarioState'
-import { DecreeColumn, FactionId, GameState, MARQUISE_BUILDING_TRACKS } from '@/gameState/schema'
+import { DecreeColumn, FactionId, GameState, MARQUISE_BUILDING_TRACKS, MARQUISE_TOTAL_WOOD } from '@/gameState/schema'
 import { useMultiPartyChat } from '@/hooks/useMultiPartyChat_realtime'
 import { TUTOR_SYSTEM_PROMPT } from '@/prompts/tutor'
 import { useChatCompleteMutation } from '@/redux/api/common'
@@ -47,6 +47,33 @@ const isSimulatableFaction = (faction: FactionId): faction is SimulatableFaction
 const VICTORY_TARGET = 30
 const formatPhaseLabel = (phase: GameState['turn']['phase']) => phase.charAt(0).toUpperCase() + phase.slice(1)
 
+type EyrieDecreeAction = Extract<SimulateActionResponse['action']['type'], 'recruit' | 'move' | 'battle' | 'build'>
+
+const buildEyrieDecreeSteps = (state: GameState): EyrieDecreeAction[] =>
+  (['recruit', 'move', 'battle', 'build'] as EyrieDecreeAction[]).flatMap(column =>
+    Array.from({ length: state.factions.eyrie.decree.columns[column as DecreeColumn].length }, () => column)
+  )
+
+const formatDiplomacyContext = (conversation: MultiPartyChat) => {
+  const recent = conversation.filter(message => message.role !== 'system').slice(-6)
+  if (!recent.length) return 'No recent table talk.'
+  return recent
+    .map(message => {
+      const speaker =
+        message.faction === 'cat'
+          ? 'Cats'
+          : message.faction === 'eyrie'
+          ? 'Eyrie'
+          : message.faction === 'alliance'
+          ? 'Alliance'
+          : message.role === 'user'
+          ? 'Cats'
+          : 'Tutor'
+      return `${speaker}: ${message.content}`
+    })
+    .join('\n')
+}
+
 export default function Home() {
   const searchParams = useSearchParams()
   const scenarioIndex = Number(searchParams.get('scenario') ?? 0)
@@ -82,6 +109,12 @@ export default function Home() {
     [boardSummary, lastPlayerAction, playerConversation]
   )
 
+  const clearingDefinitionMap = useMemo(() => {
+    const map = new Map<string, (typeof WOODLAND_BOARD_DEFINITION.clearings)[number]>()
+    WOODLAND_BOARD_DEFINITION.clearings.forEach(def => map.set(def.id, def))
+    return map
+  }, [])
+
   // March action state
   const [isMarchMode, setIsMarchMode] = useState(false)
   const [marchFromClearing, setMarchFromClearing] = useState<string | null>(null)
@@ -99,8 +132,6 @@ export default function Home() {
 
   // Recruit action state
   const [isRecruitMode, setIsRecruitMode] = useState(false)
-  const [recruitClearing, setRecruitClearing] = useState<string | null>(null)
-  const [recruitWarriorCount, setRecruitWarriorCount] = useState(1)
 
   // Place wood action state
   const [isPlaceWoodMode, setIsPlaceWoodMode] = useState(false)
@@ -115,10 +146,18 @@ export default function Home() {
   const [waitingForPlayerAction, setWaitingForPlayerAction] = useState(false)
   const [actionsThisPhase, setActionsThisPhase] = useState(0)
   const autoPlayTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const lastTurnRef = useRef<{ faction: FactionId; phase: string }>({ 
-    faction: gameState.turn.currentFaction, 
-    phase: gameState.turn.phase 
+  const lastTurnRef = useRef<{ faction: FactionId; phase: string }>({
+    faction: gameState.turn.currentFaction,
+    phase: gameState.turn.phase,
   })
+  const [eyrieDecreePlan, setEyrieDecreePlan] = useState<{ steps: EyrieDecreeAction[]; total: number }>({
+    steps: [],
+    total: 0,
+  })
+  const eyriePendingActionsRef = useRef<EyrieDecreeAction[]>([])
+  useEffect(() => {
+    eyriePendingActionsRef.current = eyrieDecreePlan.steps.slice()
+  }, [eyrieDecreePlan.steps])
 
   const tutorChat = useCallback(async () => {
     if (loadingTutorResponse) return
@@ -150,6 +189,27 @@ export default function Home() {
     }
   }, [playerConversation])
 
+  useEffect(() => {
+    const isEyrieDaylight = gameState.turn.currentFaction === 'eyrie' && gameState.turn.phase === 'daylight'
+    if (isEyrieDaylight && actionsThisPhase === 0) {
+      const steps = buildEyrieDecreeSteps(gameState)
+      setEyrieDecreePlan({ steps, total: steps.length })
+      return
+    }
+    if (!isEyrieDaylight) {
+      if (eyrieDecreePlan.steps.length || eyrieDecreePlan.total) {
+        setEyrieDecreePlan({ steps: [], total: 0 })
+      }
+    }
+  }, [
+    gameState.turn.currentFaction,
+    gameState.turn.phase,
+    gameState.factions.eyrie.decree,
+    actionsThisPhase,
+    eyrieDecreePlan.steps.length,
+    eyrieDecreePlan.total,
+  ])
+
   const cloneGameState = useCallback((value: GameState) => JSON.parse(JSON.stringify(value)) as GameState, [])
 
   const advancePhase = useCallback(() => {
@@ -173,6 +233,9 @@ export default function Home() {
 
       next.turn.phase = newPhase
       next.turn.actionSubstep = undefined
+      if (next.turn.currentFaction === 'marquise' && newPhase === 'birdsong') {
+        next.factions.marquise.woodInSupply = MARQUISE_TOTAL_WOOD
+      }
       return next
     })
     setLastPlayerAction(description || 'Advanced phase')
@@ -206,7 +269,7 @@ export default function Home() {
     setActionsThisPhase(0)
     lastTurnRef.current = {
       faction: getScenarioGameState(scenarioIndex).turn.currentFaction,
-      phase: getScenarioGameState(scenarioIndex).turn.phase
+      phase: getScenarioGameState(scenarioIndex).turn.phase,
     }
   }, [scenarioIndex, scenario.title])
 
@@ -221,7 +284,7 @@ export default function Home() {
     if (gameState.turn.currentFaction !== 'marquise') {
       return true // Not player's turn, allow all actions
     }
-    
+
     // Check action limits based on phase
     if (gameState.turn.phase === 'birdsong') {
       return actionsThisPhase < 1 // Birdsong: 1 action
@@ -230,7 +293,7 @@ export default function Home() {
     } else if (gameState.turn.phase === 'evening') {
       return actionsThisPhase < 1 // Evening: 1 action
     }
-    
+
     return true
   }, [gameState.turn.currentFaction, gameState.turn.phase, actionsThisPhase])
 
@@ -254,8 +317,6 @@ export default function Home() {
       setBuildMode(null)
       setBuildClearing(null)
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
       setIsPlaceWoodMode(false)
       setPlaceWoodClearing(null)
     }
@@ -267,6 +328,31 @@ export default function Home() {
     setMarchToClearing(null)
     setMarchWarriorCount(1)
   }, [])
+
+  // Get valid clearings and warrior counts for march planning
+  const validFromClearings = useMemo(() => {
+    if (!isMarchMode || marchFromClearing) return []
+
+    return Object.entries(gameState.board.clearings)
+      .filter(([, clearing]) => (clearing.warriors.marquise ?? 0) > 0)
+      .map(([id]) => id)
+  }, [isMarchMode, marchFromClearing, gameState.board.clearings])
+
+  const validToClearings = useMemo(() => {
+    if (!isMarchMode || !marchFromClearing || marchToClearing) return []
+
+    const fromClearing = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === marchFromClearing)
+    if (!fromClearing) return []
+
+    return fromClearing.adjacentClearings
+  }, [isMarchMode, marchFromClearing, marchToClearing])
+
+  const maxWarriors = useMemo(() => {
+    if (!marchFromClearing) return 0
+    return gameState.board.clearings[marchFromClearing]?.warriors.marquise ?? 0
+  }, [marchFromClearing, gameState.board.clearings])
+
+  const canExecuteMarchAction = Boolean(marchFromClearing && marchToClearing)
 
   const handleClearingClick = useCallback(
     (clearingId: string) => {
@@ -306,14 +392,14 @@ export default function Home() {
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        alert(error.error || 'Failed to execute march')
+        const error = await response.json().catch(() => ({}))
+        alert((error as { error?: string }).error || 'Failed to execute march')
         return
       }
 
       const data = await response.json()
       setGameState(data.state)
-      
+
       const description = `Moved ${marchWarriorCount} warrior(s) from #${marchFromClearing.toUpperCase()} to #${marchToClearing.toUpperCase()}`
       setLastPlayerAction(description)
       setAiActionHistory(prev => [
@@ -326,37 +412,17 @@ export default function Home() {
           timestamp: Date.now(),
         },
       ])
-      
-      cancelMarch()
+
+      setMarchFromClearing(null)
+      setMarchToClearing(null)
+      setMarchWarriorCount(1)
       handlePlayerActionComplete()
     } catch (error) {
       console.error('March error:', error)
       alert('Failed to execute march')
     }
-  }, [marchFromClearing, marchToClearing, marchWarriorCount, gameState, cancelMarch, handlePlayerActionComplete])
-
-  // Get valid clearings for march selection
-  const validFromClearings = useMemo(() => {
-    if (!isMarchMode || marchFromClearing) return []
-
-    return Object.entries(gameState.board.clearings)
-      .filter(([, clearing]) => (clearing.warriors.marquise ?? 0) > 0)
-      .map(([id]) => id)
-  }, [isMarchMode, marchFromClearing, gameState.board.clearings])
-
-  const validToClearings = useMemo(() => {
-    if (!isMarchMode || !marchFromClearing || marchToClearing) return []
-
-    const fromClearing = WOODLAND_BOARD_DEFINITION.clearings.find(c => c.id === marchFromClearing)
-    if (!fromClearing) return []
-
-    return fromClearing.adjacentClearings
-  }, [isMarchMode, marchFromClearing, marchToClearing])
-
-  const maxWarriors = useMemo(() => {
-    if (!marchFromClearing) return 0
-    return gameState.board.clearings[marchFromClearing]?.warriors.marquise ?? 0
-  }, [marchFromClearing, gameState.board.clearings])
+  }, [marchFromClearing, marchToClearing, marchWarriorCount, gameState, handlePlayerActionComplete])
+  const nextEyrieAction = eyrieDecreePlan.steps[0]
 
   // Battle action handlers
   const toggleBattle = useCallback(() => {
@@ -376,8 +442,6 @@ export default function Home() {
       setBuildMode(null)
       setBuildClearing(null)
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
       setIsPlaceWoodMode(false)
       setPlaceWoodClearing(null)
     }
@@ -569,8 +633,6 @@ export default function Home() {
       setBattleClearing(null)
       setBattleDefender(null)
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
       setIsPlaceWoodMode(false)
       setPlaceWoodClearing(null)
     }
@@ -592,8 +654,6 @@ export default function Home() {
       setBattleClearing(null)
       setBattleDefender(null)
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
       setIsPlaceWoodMode(false)
       setPlaceWoodClearing(null)
     }
@@ -615,8 +675,6 @@ export default function Home() {
       setBattleClearing(null)
       setBattleDefender(null)
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
       setIsPlaceWoodMode(false)
       setPlaceWoodClearing(null)
     }
@@ -715,13 +773,8 @@ export default function Home() {
   const toggleRecruit = useCallback(() => {
     if (isRecruitMode) {
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
     } else {
-      // Turn on recruit mode, turn off other modes
       setIsRecruitMode(true)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
       setIsMarchMode(false)
       setMarchFromClearing(null)
       setMarchToClearing(null)
@@ -738,22 +791,9 @@ export default function Home() {
 
   const cancelRecruit = useCallback(() => {
     setIsRecruitMode(false)
-    setRecruitClearing(null)
-    setRecruitWarriorCount(1)
   }, [])
 
-  const handleRecruitClearingClick = useCallback(
-    (clearingId: string) => {
-      if (!isRecruitMode) return
-      setRecruitClearing(clearingId)
-      setRecruitWarriorCount(1)
-    },
-    [isRecruitMode]
-  )
-
   const executeRecruit = useCallback(async () => {
-    if (!recruitClearing) return
-
     try {
       const response = await fetch('/api/game/recruit', {
         method: 'POST',
@@ -761,8 +801,6 @@ export default function Home() {
         body: JSON.stringify({
           state: gameState,
           faction: 'marquise',
-          clearingId: recruitClearing,
-          warriors: recruitWarriorCount,
         }),
       })
 
@@ -775,12 +813,19 @@ export default function Home() {
       const data = await response.json()
       setGameState(data.state)
 
+      const placementSummary = data.placements
+        .map((placement: { clearingId: string; warriorsPlaced: number }) => {
+          return `#${placement.clearingId.toUpperCase()} (+${placement.warriorsPlaced})`
+        })
+        .join(', ')
+
       alert(
-        `⚔️ Successfully recruited ${recruitWarriorCount} warrior(s) in clearing #${recruitClearing.toUpperCase()}\n\n` +
+        `⚔️ Recruited ${data.totalPlaced} warrior(s) across all recruiters.\n\n` +
+          `${placementSummary || 'No placements were possible.'}\n` +
           `Warriors in supply: ${data.state.factions.marquise.warriorsInSupply}`
       )
 
-      const description = `Recruited ${recruitWarriorCount} warrior(s) in clearing #${recruitClearing.toUpperCase()}`
+      const description = `Recruited ${data.totalPlaced} warrior(s): ${placementSummary || 'No placements possible.'}`
       setLastPlayerAction(description)
       setAiActionHistory(prev => [
         ...prev,
@@ -799,37 +844,251 @@ export default function Home() {
       console.error('Recruit error:', error)
       alert('Failed to recruit')
     }
-  }, [recruitClearing, recruitWarriorCount, gameState, cancelRecruit, handlePlayerActionComplete])
+  }, [gameState, cancelRecruit, handlePlayerActionComplete])
 
-  // Get valid clearings for recruiting
-  const validRecruitClearings = useMemo(() => {
-    if (!isRecruitMode || recruitClearing) return []
+  const computeEyrieFallbackAction = useCallback(
+    (state: GameState, actionType?: EyrieDecreeAction): SimulateActionResponse['action'] | null => {
+      if (!actionType) return null
+      const boardEntries = Object.entries(state.board.clearings)
+      const suitMatches = (clearingId: string, column: DecreeColumn) => {
+        const cards = state.factions.eyrie.decree.columns[column]
+        if (!cards.length) return true
+        const suit = cards[0].suit
+        if (suit === 'bird') return true
+        const def = clearingDefinitionMap.get(clearingId)
+        return def?.suit === suit
+      }
 
+      if (actionType === 'recruit') {
+        if (state.factions.eyrie.warriorsInSupply <= 0) return null
+        const roostEntry = boardEntries.find(
+          ([id, clearing]) =>
+            clearing.buildings.some(b => b.faction === 'eyrie' && b.type === 'roost') && suitMatches(id, 'recruit')
+        )
+        if (!roostEntry) return null
+        return { type: 'recruit', clearingId: roostEntry[0], warriors: 1 }
+      }
+
+      if (actionType === 'move') {
+        for (const [id, clearing] of boardEntries) {
+          if (!suitMatches(id, 'move')) continue
+          const warriors = clearing.warriors.eyrie ?? 0
+          if (warriors <= 1) continue
+          const def = clearingDefinitionMap.get(id)
+          if (!def) continue
+          for (const adj of def.adjacentClearings) {
+            if (!state.board.clearings[adj]) continue
+            const moving = Math.max(1, warriors - 1)
+            return { type: 'move', from: id, to: adj, warriors: moving }
+          }
+        }
+        return null
+      }
+
+      if (actionType === 'battle') {
+        for (const [id, clearing] of boardEntries) {
+          if (!suitMatches(id, 'battle')) continue
+          const warriors = clearing.warriors.eyrie ?? 0
+          if (warriors === 0) continue
+          const defenderWarrior = Object.entries(clearing.warriors).find(
+            ([factionId, count]) => factionId !== 'eyrie' && (count ?? 0) > 0
+          )
+          if (defenderWarrior) {
+            return { type: 'battle', clearingId: id, defender: defenderWarrior[0] as FactionId }
+          }
+          const defenderBuilding = clearing.buildings.find(b => b.faction !== 'eyrie')
+          if (defenderBuilding) {
+            return { type: 'battle', clearingId: id, defender: defenderBuilding.faction }
+          }
+          const defenderToken = clearing.tokens.find(t => t.faction !== 'eyrie')
+          if (defenderToken) {
+            return { type: 'battle', clearingId: id, defender: defenderToken.faction }
+          }
+        }
+        return null
+      }
+
+      if (actionType === 'build') {
+        for (const [id, clearing] of boardEntries) {
+          if (!suitMatches(id, 'build')) continue
+          if (clearing.buildings.some(b => b.faction === 'eyrie' && b.type === 'roost')) continue
+          const def = clearingDefinitionMap.get(id)
+          if (!def) continue
+          if (clearing.buildings.length >= def.buildingSlots) continue
+          const eyrieWarriors = clearing.warriors.eyrie ?? 0
+          if (eyrieWarriors === 0) continue
+          const enemyStrength = Object.entries(clearing.warriors)
+            .filter(([factionId]) => factionId !== 'eyrie')
+            .reduce((sum, [, count]) => sum + (count ?? 0), 0)
+          if (eyrieWarriors < enemyStrength) continue
+          return { type: 'build', clearingId: id, buildingType: 'roost' }
+        }
+      }
+
+      return null
+    },
+    [clearingDefinitionMap]
+  )
+
+  const recruitTargets = useMemo(() => {
     return Object.entries(gameState.board.clearings)
-      .filter(([, clearing]) => {
-        // Must have recruiters in the clearing
-        const recruitersInClearing = clearing.buildings.filter(
-          b => b.faction === 'marquise' && b.type === 'recruiter'
-        ).length
-        return recruitersInClearing > 0
+      .map(([clearingId, clearing]) => {
+        const recruiters = clearing.buildings.filter(b => b.faction === 'marquise' && b.type === 'recruiter').length
+        return recruiters > 0
+          ? {
+              clearingId,
+              recruiters,
+            }
+          : null
       })
-      .map(([id]) => id)
-  }, [isRecruitMode, recruitClearing, gameState.board.clearings])
+      .filter((entry): entry is { clearingId: string; recruiters: number } => Boolean(entry))
+  }, [gameState.board.clearings])
 
-  // Get max warriors that can be recruited in selected clearing
-  const maxRecruitWarriors = useMemo(() => {
-    if (!recruitClearing) return 0
+  const validRecruitClearings = useMemo(() => {
+    if (!isRecruitMode) return []
+    return recruitTargets.map(target => target.clearingId)
+  }, [isRecruitMode, recruitTargets])
 
-    const clearing = gameState.board.clearings[recruitClearing]
-    if (!clearing) return 0
+  const canExecuteRecruit = recruitTargets.length > 0 && (gameState.factions.marquise.warriorsInSupply ?? 0) > 0
+  const recruitPreview = useMemo(() => {
+    let remaining = gameState.factions.marquise.warriorsInSupply ?? 0
+    return recruitTargets.map(target => {
+      const willPlace = Math.min(target.recruiters, remaining)
+      remaining = Math.max(0, remaining - willPlace)
+      return { ...target, willPlace }
+    })
+  }, [recruitTargets, gameState.factions.marquise.warriorsInSupply])
+  const totalPotentialRecruit = recruitPreview.reduce((sum, target) => sum + target.willPlace, 0)
 
-    const recruitersInClearing = clearing.buildings.filter(
-      b => b.faction === 'marquise' && b.type === 'recruiter'
-    ).length
+  const runEyrieBirdsong = useCallback(async () => {
+    try {
+      const response = await fetch('/api/game/eyrie/birdsong', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: gameState }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error((error as { message?: string }).message || 'Eyrie Birdsong failed')
+      }
+      const data = (await response.json()) as { state: GameState; log: string[] }
+      setGameState(data.state)
+      const summary = data.log.join(' ')
+      setLastPlayerAction(summary || 'Eyrie completed Birdsong.')
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `eyrie_${Date.now()}`,
+          faction: 'eyrie',
+          action: summary || 'Birdsong complete.',
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+    } catch (error) {
+      console.error('Eyrie Birdsong error', error)
+      alert(error instanceof Error ? error.message : 'Failed to resolve Eyrie Birdsong')
+    }
+  }, [gameState])
 
-    // Can recruit up to the number of recruiters, but limited by supply
-    return Math.min(recruitersInClearing, gameState.factions.marquise.warriorsInSupply)
-  }, [recruitClearing, gameState.board.clearings, gameState.factions.marquise.warriorsInSupply])
+  const runEyrieEvening = useCallback(async () => {
+    try {
+      const response = await fetch('/api/game/eyrie/evening', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: gameState }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error((error as { message?: string }).message || 'Eyrie Evening failed')
+      }
+      const data = (await response.json()) as { state: GameState; log: string[] }
+      setGameState(data.state)
+      const summary = data.log.join(' ')
+      setLastPlayerAction(summary || 'Eyrie completed Evening.')
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `eyrie_${Date.now()}`,
+          faction: 'eyrie',
+          action: summary || 'Evening complete.',
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+    } catch (error) {
+      console.error('Eyrie Evening error', error)
+      alert(error instanceof Error ? error.message : 'Failed to resolve Eyrie Evening')
+    }
+  }, [gameState])
+
+  const runEyrieTurmoil = useCallback(
+    async (stateOverride?: GameState) => {
+      const payload = stateOverride ?? gameState
+      const response = await fetch('/api/game/eyrie/turmoil', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: payload }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error((error as { message?: string }).message || 'Failed to resolve Turmoil')
+      }
+      const data = (await response.json()) as { state: GameState; lostPoints: number }
+      setGameState(data.state)
+      const summary = `Eyrie fell into Turmoil and lost ${data.lostPoints} VP.`
+      setLastPlayerAction(summary)
+      setAiActionHistory(prev => [
+        ...prev,
+        {
+          id: `eyrie_${Date.now()}`,
+          faction: 'eyrie',
+          action: summary,
+          reasoning: '',
+          timestamp: Date.now(),
+        },
+      ])
+      return data.state
+    },
+    [gameState]
+  )
+
+  const handleEyrieBirdsong = useCallback(async () => {
+    if (isSimulatingAction) return
+    if (gameState.turn.phase !== 'birdsong' || gameState.turn.currentFaction !== 'eyrie') return
+    if (actionsThisPhase > 0) {
+      alert('Birdsong already resolved this turn.')
+      return
+    }
+    setIsSimulatingAction(true)
+    try {
+      await runEyrieBirdsong()
+      setActionsThisPhase(1)
+      advancePhase()
+    } finally {
+      setIsSimulatingAction(false)
+    }
+  }, [
+    isSimulatingAction,
+    gameState.turn.phase,
+    gameState.turn.currentFaction,
+    actionsThisPhase,
+    runEyrieBirdsong,
+    advancePhase,
+  ])
+
+  const handleEyrieEvening = useCallback(async () => {
+    if (isSimulatingAction) return
+    if (gameState.turn.phase !== 'evening' || gameState.turn.currentFaction !== 'eyrie') return
+    setIsSimulatingAction(true)
+    try {
+      await runEyrieEvening()
+      setActionsThisPhase(1)
+      advancePhase()
+    } finally {
+      setIsSimulatingAction(false)
+    }
+  }, [isSimulatingAction, gameState.turn.phase, gameState.turn.currentFaction, runEyrieEvening, advancePhase])
 
   // Place wood handlers
   const togglePlaceWood = useCallback(() => {
@@ -849,8 +1108,6 @@ export default function Home() {
       setBuildMode(null)
       setBuildClearing(null)
       setIsRecruitMode(false)
-      setRecruitClearing(null)
-      setRecruitWarriorCount(1)
     }
   }, [isPlaceWoodMode])
 
@@ -871,9 +1128,7 @@ export default function Home() {
       const clearing = gameState.board.clearings[clearingId]
       if (!clearing) return
 
-      const sawmillsInClearing = clearing.buildings.filter(
-        b => b.faction === 'marquise' && b.type === 'sawmill',
-      ).length
+      const sawmillsInClearing = clearing.buildings.filter(b => b.faction === 'marquise' && b.type === 'sawmill').length
 
       if (sawmillsInClearing === 0) {
         alert('Select a clearing with at least one sawmill.')
@@ -882,7 +1137,7 @@ export default function Home() {
 
       setPlaceWoodClearing(clearingId)
     },
-    [gameState.board.clearings, gameState.factions.marquise.woodInSupply, isPlaceWoodMode],
+    [gameState.board.clearings, gameState.factions.marquise.woodInSupply, isPlaceWoodMode]
   )
 
   const executePlaceWood = useCallback(async () => {
@@ -912,7 +1167,7 @@ export default function Home() {
 
       const data = await response.json()
       setGameState(data.state)
-      
+
       const description = `Placed wood in clearing #${placeWoodClearing.toUpperCase()}`
       setLastPlayerAction(description)
       setAiActionHistory(prev => [
@@ -925,7 +1180,7 @@ export default function Home() {
           timestamp: Date.now(),
         },
       ])
-      
+
       cancelPlaceWood()
       handlePlayerActionComplete()
     } catch (error) {
@@ -954,42 +1209,90 @@ export default function Home() {
   const simulateFactionAction = useCallback(
     async (faction: SimulatableFaction) => {
       if (isSimulatingAction) return
+      if (faction === 'eyrie' && gameState.turn.phase !== 'daylight') {
+        alert('Eyrie can only simulate Decree actions during Daylight. Resolve Birdsong or Evening first.')
+        return
+      }
       setIsSimulatingAction(true)
       try {
         const factionHistory = aiActionHistory.filter(entry => entry.faction === faction).slice(-3)
-        const response = await fetch('/api/game/simulate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            state: gameState,
-            faction,
-            recentActions: factionHistory.map(entry => ({ action: entry.action })),
-          }),
-        })
+        const enforcedAction: EyrieDecreeAction | undefined =
+          faction === 'eyrie' && gameState.turn.phase === 'daylight' ? nextEyrieAction : undefined
+        const diplomacyContext = formatDiplomacyContext(playerConversation)
 
-        if (!response.ok) {
-          const raw = await response.text().catch(() => '')
-          let parsed: { message?: string; error?: unknown } | null = null
-          try {
-            parsed = raw ? (JSON.parse(raw) as { message?: string; error?: unknown }) : null
-          } catch {
-            parsed = null
-          }
-          const normalize = (value: unknown): string | undefined => {
-            if (!value) return undefined
-            if (typeof value === 'string') return value
-            if (value instanceof Error) return value.message
-            if (typeof value === 'object') {
-              const candidate = value as { message?: string; typeName?: string; type?: string }
-              return candidate.message ?? candidate.typeName ?? candidate.type ?? JSON.stringify(value)
+        const pendingActions =
+          faction === 'eyrie' && gameState.turn.phase === 'daylight' ? [...eyriePendingActionsRef.current] : undefined
+
+        const requestSimulation = async () => {
+          const response = await fetch('/api/game/simulate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              state: gameState,
+              faction,
+              recentActions: factionHistory.map(entry => ({ action: entry.action })),
+              diplomacyContext,
+              nextRequiredAction: enforcedAction,
+              availableActions: pendingActions,
+            }),
+          })
+
+          if (!response.ok) {
+            const raw = await response.text().catch(() => '')
+            let parsed: { message?: string; error?: unknown } | null = null
+            try {
+              parsed = raw ? (JSON.parse(raw) as { message?: string; error?: unknown }) : null
+            } catch {
+              parsed = null
             }
-            return String(value)
+            const normalize = (value: unknown): string | undefined => {
+              if (!value) return undefined
+              if (typeof value === 'string') return value
+              if (value instanceof Error) return value.message
+              if (typeof value === 'object') {
+                const candidate = value as { message?: string; typeName?: string; type?: string }
+                return candidate.message ?? candidate.typeName ?? candidate.type ?? JSON.stringify(value)
+              }
+              return String(value)
+            }
+            const fallback = raw || response.statusText || 'Failed to simulate action'
+            throw new Error(parsed?.message ?? normalize(parsed?.error) ?? fallback)
           }
-          const fallback = raw || response.statusText || 'Failed to simulate action'
-          throw new Error(parsed?.message ?? normalize(parsed?.error) ?? fallback)
+
+          return (await response.json()) as SimulateActionResponse
         }
 
-        const simulation = (await response.json()) as SimulateActionResponse
+        let simulation: SimulateActionResponse | null = null
+        const maxAttempts =
+          faction === 'eyrie' && enforcedAction
+            ? Math.max(1, pendingActions?.filter(action => action === enforcedAction).length ?? 0)
+            : 1
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          const candidate = await requestSimulation()
+          if (faction === 'eyrie' && enforcedAction && candidate.action.type !== enforcedAction) {
+            if (attempt === maxAttempts - 1) {
+              const fallbackAction = computeEyrieFallbackAction(gameState, enforcedAction)
+              if (fallbackAction) {
+                simulation = { action: fallbackAction, reasoning: 'fallback decree action' }
+              }
+            }
+            if (!simulation) {
+              continue
+            }
+          } else {
+            simulation = candidate
+          }
+          if (simulation) break
+        }
+
+        if (!simulation) {
+          if (faction === 'eyrie' && enforcedAction) {
+            await runEyrieTurmoil(gameState)
+            eyriePendingActionsRef.current = []
+          }
+          setIsSimulatingAction(false)
+          return
+        }
         let updatedState = gameState
         let description = ''
         let stateChanged = false
@@ -1015,96 +1318,177 @@ export default function Home() {
           return res.json()
         }
 
-        switch (simulation.action.type) {
-          case 'move': {
-            try {
-              const data = await applyAction('/api/game/move', {
-                state: updatedState,
-                faction,
-                from: simulation.action.from,
-                to: simulation.action.to,
-                warriors: simulation.action.warriors,
-              })
-              updatedState = data.state
-              stateChanged = true
-              description = `${FACTION_META[faction].label} moved ${simulation.action.warriors} warriors from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()}`
-            } catch (error) {
-              console.warn(`Move action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
-              description = `${FACTION_META[faction].label} could not move from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()} - passed instead`
+        let resolvedByTurmoil = false
+
+        if (faction === 'eyrie' && enforcedAction && simulation.action.type !== enforcedAction) {
+          eyriePendingActionsRef.current = []
+          await runEyrieTurmoil(updatedState)
+          resolvedByTurmoil = true
+        } else {
+          switch (simulation.action.type) {
+            case 'move': {
+              try {
+                const data = await applyAction('/api/game/move', {
+                  state: updatedState,
+                  faction,
+                  from: simulation.action.from,
+                  to: simulation.action.to,
+                  warriors: simulation.action.warriors,
+                })
+                updatedState = data.state
+                stateChanged = true
+                description = `${FACTION_META[faction].label} moved ${
+                  simulation.action.warriors
+                } warriors from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()}`
+              } catch (error) {
+                console.warn(
+                  `Move action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`
+                )
+                description = `${
+                  FACTION_META[faction].label
+                } could not move from #${simulation.action.from.toUpperCase()} to #${simulation.action.to.toUpperCase()} - passed instead`
+              }
+              break
             }
-            break
-          }
-          case 'battle': {
-            try {
-              const data = await applyAction('/api/game/battle', {
-                state: updatedState,
-                clearingId: simulation.action.clearingId,
-                attacker: faction,
-                defender: simulation.action.defender,
-              })
-              updatedState = data.state
-              stateChanged = true
-              description = `${FACTION_META[faction].label} battled ${FACTION_META[simulation.action.defender].label} in #${simulation.action.clearingId.toUpperCase()}`
-            } catch (error) {
-              console.warn(`Battle action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
-              description = `${FACTION_META[faction].label} could not battle in #${simulation.action.clearingId.toUpperCase()} - passed instead`
+            case 'battle': {
+              try {
+                const data = await applyAction('/api/game/battle', {
+                  state: updatedState,
+                  clearingId: simulation.action.clearingId,
+                  attacker: faction,
+                  defender: simulation.action.defender,
+                })
+                updatedState = data.state
+                stateChanged = true
+                description = `${FACTION_META[faction].label} battled ${
+                  FACTION_META[simulation.action.defender].label
+                } in #${simulation.action.clearingId.toUpperCase()}`
+              } catch (error) {
+                console.warn(
+                  `Battle action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`
+                )
+                description = `${
+                  FACTION_META[faction].label
+                } could not battle in #${simulation.action.clearingId.toUpperCase()} - passed instead`
+              }
+              break
             }
-            break
-          }
-          case 'build': {
-            try {
-              const data = await applyAction('/api/game/build', {
-                state: updatedState,
-                faction,
-                clearingId: simulation.action.clearingId,
-                buildingType: simulation.action.buildingType,
-              })
-              updatedState = data.state
-              stateChanged = true
-              const structure =
-                simulation.action.buildingType?.replace(/_/g, ' ') ??
-                (faction === 'eyrie' ? 'roost' : 'building')
-              description = `${FACTION_META[faction].label} built ${structure} in #${simulation.action.clearingId.toUpperCase()}`
-            } catch (error) {
-              // If building fails (e.g., no slots available), treat it as a pass
-              console.warn(`Build action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
-              description = `${FACTION_META[faction].label} could not build in #${simulation.action.clearingId.toUpperCase()} (no slots available) - passed instead`
+            case 'build': {
+              try {
+                const data = await applyAction('/api/game/build', {
+                  state: updatedState,
+                  faction,
+                  clearingId: simulation.action.clearingId,
+                  buildingType: simulation.action.buildingType,
+                })
+                updatedState = data.state
+                stateChanged = true
+                const structure =
+                  simulation.action.buildingType?.replace(/_/g, ' ') ?? (faction === 'eyrie' ? 'roost' : 'building')
+                description = `${
+                  FACTION_META[faction].label
+                } built ${structure} in #${simulation.action.clearingId.toUpperCase()}`
+              } catch (error) {
+                // If building fails (e.g., no slots available), treat it as a pass
+                console.warn(
+                  `Build action failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`
+                )
+                description = `${
+                  FACTION_META[faction].label
+                } could not build in #${simulation.action.clearingId.toUpperCase()} (no slots available) - passed instead`
+              }
+              break
             }
-            break
-          }
-          case 'token': {
-            if (faction !== 'woodland_alliance') {
-              throw new Error('Only the Woodland Alliance can place tokens in this mode')
+            case 'recruit': {
+              try {
+                const data = await applyAction('/api/game/recruit', {
+                  state: updatedState,
+                  faction,
+                  clearingId: simulation.action.clearingId,
+                  warriors: simulation.action.warriors,
+                })
+                updatedState = data.state
+                stateChanged = true
+                const placements = (data.placements ?? []) as { clearingId: string; warriorsPlaced: number }[]
+                const placementSummary =
+                  placements.length > 0
+                    ? placements
+                        .map(entry => `#${entry.clearingId.toUpperCase()} (+${entry.warriorsPlaced})`)
+                        .join(', ')
+                    : 'no placements'
+                description = `${FACTION_META[faction].label} recruited ${
+                  data.totalPlaced ?? placements.length
+                } warrior(s): ${placementSummary}`
+              } catch (error) {
+                console.warn(
+                  `Recruit action failed: ${
+                    error instanceof Error ? error.message : 'Unknown error'
+                  }. Treating as pass.`
+                )
+                description = `${FACTION_META[faction].label} could not recruit - passed instead`
+              }
+              break
             }
-            try {
-              const data = await applyAction('/api/game/token', {
-                state: updatedState,
-                faction,
-                clearingId: simulation.action.clearingId,
-                tokenType: simulation.action.tokenType,
-              })
-              updatedState = data.state
-              stateChanged = true
-              description = `${FACTION_META[faction].label} placed a ${simulation.action.tokenType} token in #${simulation.action.clearingId.toUpperCase()}`
-            } catch (error) {
-              console.warn(`Token placement failed: ${error instanceof Error ? error.message : 'Unknown error'}. Treating as pass.`)
-              description = `${FACTION_META[faction].label} could not place token in #${simulation.action.clearingId.toUpperCase()} - passed instead`
+            case 'token': {
+              if (faction !== 'woodland_alliance') {
+                throw new Error('Only the Woodland Alliance can place tokens in this mode')
+              }
+              try {
+                const data = await applyAction('/api/game/token', {
+                  state: updatedState,
+                  faction,
+                  clearingId: simulation.action.clearingId,
+                  tokenType: simulation.action.tokenType,
+                })
+                updatedState = data.state
+                stateChanged = true
+                description = `${FACTION_META[faction].label} placed a ${
+                  simulation.action.tokenType
+                } token in #${simulation.action.clearingId.toUpperCase()}`
+              } catch (error) {
+                console.warn(
+                  `Token placement failed: ${
+                    error instanceof Error ? error.message : 'Unknown error'
+                  }. Treating as pass.`
+                )
+                description = `${
+                  FACTION_META[faction].label
+                } could not place token in #${simulation.action.clearingId.toUpperCase()} - passed instead`
+              }
+              break
             }
-            break
+            case 'pass': {
+              if (faction === 'eyrie' && enforcedAction) {
+                await runEyrieTurmoil(updatedState)
+                resolvedByTurmoil = true
+              } else {
+                description = `${FACTION_META[faction].label} passed: ${simulation.action.reason}`
+              }
+              break
+            }
+            default:
+              throw new Error('Simulated action is not supported yet')
           }
-          case 'pass': {
-            description = `${FACTION_META[faction].label} passed: ${simulation.action.reason}`
-            break
-          }
-          default:
-            throw new Error('Simulated action is not supported yet')
         }
 
-        const historyDescription =
-          description || `${FACTION_META[faction].label} completed a simulated action.`
+        if (resolvedByTurmoil) {
+          return
+        }
+
+        const historyDescription = description || `${FACTION_META[faction].label} completed a simulated action.`
 
         if (stateChanged) {
           setGameState(updatedState)
+          if (faction === 'eyrie' && enforcedAction) {
+            setEyrieDecreePlan(prev => {
+              if (!prev.steps.length || prev.steps[0] !== simulation.action.type) {
+                return prev
+              }
+              return { ...prev, steps: prev.steps.slice(1) }
+            })
+            pendingActions?.shift()
+            eyriePendingActionsRef.current = pendingActions?.slice() ?? []
+          }
         }
         setLastPlayerAction(historyDescription)
         setAiActionHistory(prev => {
@@ -1127,8 +1511,24 @@ export default function Home() {
         setIsSimulatingAction(false)
       }
     },
-    [aiActionHistory, gameState, isSimulatingAction],
+    [
+      aiActionHistory,
+      gameState,
+      isSimulatingAction,
+      playerConversation,
+      nextEyrieAction,
+      runEyrieTurmoil,
+      computeEyrieFallbackAction,
+    ]
   )
+
+  const schedulePhaseAdvance = useCallback(() => {
+    if (autoPlayTimerRef.current) return
+    autoPlayTimerRef.current = setTimeout(() => {
+      advancePhase()
+      autoPlayTimerRef.current = null
+    }, 800)
+  }, [advancePhase])
 
   // Game manager - handles automatic turn flow according to Root rules
   const processGameFlow = useCallback(async () => {
@@ -1146,31 +1546,50 @@ export default function Home() {
     // AI factions (Eyrie, Woodland Alliance)
     if (isSimulatableFaction(currentFaction)) {
       setWaitingForPlayerAction(false)
-      
-      // Determine max actions for this phase based on Root rules
-      let maxActions = 0
-      if (currentPhase === 'birdsong') {
-        // Birdsong: typically 1-2 setup actions (e.g., draw cards, resolve decree for Eyrie)
-        maxActions = 1
-      } else if (currentPhase === 'daylight') {
-        // Daylight: Main action phase - Eyrie uses decree, Alliance can do multiple actions
-        // For simplicity, allow 3-5 actions depending on faction
-        maxActions = currentFaction === 'eyrie' ? 4 : 3
-      } else if (currentPhase === 'evening') {
-        // Evening: Draw and discard, score points - typically 1-2 actions
-        maxActions = 1
+
+      if (currentFaction === 'eyrie') {
+        if (currentPhase === 'birdsong') {
+          await runEyrieBirdsong()
+          setActionsThisPhase(1)
+          schedulePhaseAdvance()
+          return
+        }
+        if (currentPhase === 'evening') {
+          await runEyrieEvening()
+          setActionsThisPhase(1)
+          schedulePhaseAdvance()
+          return
+        }
       }
 
-      // Take action if haven't reached max
+      const remainingEyrieSteps = eyrieDecreePlan.steps.length
+      const eyrieTarget =
+        currentFaction === 'eyrie' ? remainingEyrieSteps || buildEyrieDecreeSteps(gameState).length || 0 : 0
+      let maxActions = 0
+      if (currentFaction === 'eyrie') {
+        if (currentPhase === 'daylight') {
+          maxActions = Math.max(0, eyrieTarget)
+        }
+      } else if (currentFaction === 'woodland_alliance') {
+        if (currentPhase === 'birdsong') {
+          maxActions = 2
+        } else if (currentPhase === 'daylight') {
+          maxActions = 3
+        } else if (currentPhase === 'evening') {
+          maxActions = gameState.factions.woodland_alliance.officers
+        }
+      }
+
+      if (maxActions <= 0) {
+        schedulePhaseAdvance()
+        return
+      }
+
       if (actionsThisPhase < maxActions) {
         await simulateFactionAction(currentFaction)
         setActionsThisPhase(prev => prev + 1)
       } else {
-        // Phase complete, advance
-        if (autoPlayTimerRef.current) clearTimeout(autoPlayTimerRef.current)
-        autoPlayTimerRef.current = setTimeout(() => {
-          advancePhase()
-        }, 1000)
+        schedulePhaseAdvance()
       }
       return
     }
@@ -1185,7 +1604,7 @@ export default function Home() {
         // Daylight: Player can take up to 3 actions (craft + 2 main actions typical in Root)
         // Wait for player input
         setWaitingForPlayerAction(true)
-        
+
         // Don't auto-advance during daylight - player decides when done
       } else if (currentPhase === 'evening') {
         // Evening: Draw and discard, score - could be player actions or auto
@@ -1194,13 +1613,14 @@ export default function Home() {
       }
     }
   }, [
-    autoPlayEnabled, 
-    isSimulatingAction, 
-    gameState.turn.currentFaction, 
-    gameState.turn.phase, 
+    autoPlayEnabled,
+    isSimulatingAction,
+    gameState,
     actionsThisPhase,
-    simulateFactionAction, 
-    advancePhase
+    simulateFactionAction,
+    schedulePhaseAdvance,
+    runEyrieBirdsong,
+    runEyrieEvening,
   ])
 
   // Effect to trigger game flow when game state changes or action completes
@@ -1210,21 +1630,31 @@ export default function Home() {
       const timer = setTimeout(() => {
         processGameFlow()
       }, 100)
-      
+
       return () => clearTimeout(timer)
     }
 
     return () => {
       if (autoPlayTimerRef.current) {
         clearTimeout(autoPlayTimerRef.current)
+        autoPlayTimerRef.current = null
       }
     }
-  }, [gameState.turn.currentFaction, gameState.turn.phase, autoPlayEnabled, isSimulatingAction, actionsThisPhase, processGameFlow])
+  }, [
+    gameState.turn.currentFaction,
+    gameState.turn.phase,
+    autoPlayEnabled,
+    isSimulatingAction,
+    actionsThisPhase,
+    processGameFlow,
+  ])
 
   const allianceBases = Object.entries(gameState.factions.woodland_alliance.bases)
     .filter(([, planted]) => planted)
     .map(([suit]) => suit.replace(/^\w/, c => c.toUpperCase()).replace(/_/g, ' '))
   const allianceBaseLabel = allianceBases.length > 0 ? allianceBases.join(', ') : 'None'
+  const allianceSupporters = gameState.factions.woodland_alliance.supporters
+  const supporterLabel = `Supporters · M${allianceSupporters.mouse}/R${allianceSupporters.rabbit}/F${allianceSupporters.fox}/B${allianceSupporters.bird}`
   const logistics = [
     {
       id: 'marquise' as FactionId,
@@ -1254,6 +1684,7 @@ export default function Home() {
       tags: [
         `Sympathy · ${gameState.factions.woodland_alliance.sympathyOnMap}`,
         `Bases · ${allianceBaseLabel}`,
+        supporterLabel,
       ],
       victory: gameState.victoryTrack.woodland_alliance,
     },
@@ -1352,7 +1783,6 @@ export default function Home() {
                   marchToClearing ||
                   battleClearing ||
                   buildClearing ||
-                  recruitClearing ||
                   undefined
                 }
                 onClearingClick={
@@ -1364,8 +1794,6 @@ export default function Home() {
                     ? handleBattleClearingClick
                     : buildMode
                     ? handleBuildClearingClick
-                    : isRecruitMode
-                    ? handleRecruitClearingClick
                     : undefined
                 }
               />
@@ -1389,366 +1817,381 @@ export default function Home() {
                     {FACTION_META[gameState.turn.currentFaction].label} Actions
                   </span>
                 </HudTitle>
-              <ActionsLayout>
-                <ActionControlsColumn>
-                  {/* Marquise de Cat Actions */}
-                  {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
-                    <ActionSection>
-                      <PhaseLabel>Birdsong Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/1 action taken)` : ''}</PhaseLabel>
-                      {waitingForPlayerAction && autoPlayEnabled && (
-                        <PlayerTurnIndicator>
-                          ⏳ Your turn! Take actions, then click "Advance phase" when done.
-                        </PlayerTurnIndicator>
-                      )}
-                      {actionsThisPhase >= 1 && (
-                        <PlayerTurnIndicator>
-                          Maximum actions reached! Click "Advance phase" to continue.
-                        </PlayerTurnIndicator>
-                      )}
-                      <ActionGrid>
-                        <ActionButton onClick={togglePlaceWood} disabled={!canPlayerTakeAction() && !isPlaceWoodMode}>
-                          {isPlaceWoodMode ? 'Cancel Place Wood' : 'Place Wood'}
-                        </ActionButton>
-                        <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
-                          Craft Card
-                        </ActionButton>
-                      </ActionGrid>
-                    </ActionSection>
-                  )}
-                  {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'daylight' && (
-                    <ActionSection>
-                      <PhaseLabel>Daylight Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/3 actions taken)` : ''}</PhaseLabel>
-                      {waitingForPlayerAction && autoPlayEnabled && (
-                        <PlayerTurnIndicator>
-                          ⏳ Your turn! Take actions, then click "Advance phase" when done.
-                        </PlayerTurnIndicator>
-                      )}
-                      {actionsThisPhase >= 3 && (
-                        <PlayerTurnIndicator>
-                          Maximum actions reached! Click "Advance phase" to continue.
-                        </PlayerTurnIndicator>
-                      )}
-                      <ActionGrid>
-                        <ActionButton onClick={toggleBattle} disabled={!canPlayerTakeAction() && !isBattleMode}>
-                          {isBattleMode ? 'Cancel Battle' : 'Battle'}
-                        </ActionButton>
-                        <ActionButton onClick={toggleMarch} disabled={!canPlayerTakeAction() && !isMarchMode}>
-                          {isMarchMode ? 'Cancel March' : 'March'}
-                        </ActionButton>
-                        <ActionButton onClick={toggleRecruit} disabled={!canPlayerTakeAction() && !isRecruitMode}>
-                          {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
-                        </ActionButton>
-                        <ActionButton onClick={toggleBuildSawmill} disabled={!canPlayerTakeAction() && buildMode !== 'sawmill'}>
-                          {buildMode === 'sawmill' ? 'Cancel Build' : 'Build Sawmill'}
-                        </ActionButton>
-                        <ActionButton onClick={toggleBuildWorkshop} disabled={!canPlayerTakeAction() && buildMode !== 'workshop'}>
-                          {buildMode === 'workshop' ? 'Cancel Build' : 'Build Workshop'}
-                        </ActionButton>
-                        <ActionButton onClick={toggleBuildRecruiter} disabled={!canPlayerTakeAction() && buildMode !== 'recruiter'}>
-                          {buildMode === 'recruiter' ? 'Cancel Build' : 'Build Recruiter'}
-                        </ActionButton>
-                      </ActionGrid>
-                    </ActionSection>
-                  )}
-                  {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'evening' && (
-                    <ActionSection>
-                      <PhaseLabel>Evening Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/1 action taken)` : ''}</PhaseLabel>
-                      {waitingForPlayerAction && autoPlayEnabled && (
-                        <PlayerTurnIndicator>
-                          ⏳ Your turn! Take actions, then click "Advance phase" when done.
-                        </PlayerTurnIndicator>
-                      )}
-                      {actionsThisPhase >= 1 && (
-                        <PlayerTurnIndicator>
-                          Maximum actions reached! Click "Advance phase" to continue.
-                        </PlayerTurnIndicator>
-                      )}
-                      <ActionGrid>
-                        <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
-                          Draw & Discard
-                        </ActionButton>
-                        <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
-                          Score Points
-                        </ActionButton>
-                      </ActionGrid>
-                    </ActionSection>
-                  )}
+                <ActionsLayout>
+                  <ActionControlsColumn>
+                    {/* Marquise de Cat Actions */}
+                    {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'birdsong' && (
+                      <ActionSection>
+                        <PhaseLabel>
+                          Birdsong Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/1 action taken)` : ''}
+                        </PhaseLabel>
+                        {waitingForPlayerAction && autoPlayEnabled && (
+                          <PlayerTurnIndicator>
+                            ⏳ Your turn! Take actions, then click "Advance phase" when done.
+                          </PlayerTurnIndicator>
+                        )}
+                        {actionsThisPhase >= 1 && (
+                          <PlayerTurnIndicator>
+                            Maximum actions reached! Click "Advance phase" to continue.
+                          </PlayerTurnIndicator>
+                        )}
+                        <ActionGrid>
+                          <ActionButton onClick={togglePlaceWood} disabled={!canPlayerTakeAction() && !isPlaceWoodMode}>
+                            {isPlaceWoodMode ? 'Cancel Place Wood' : 'Place Wood'}
+                          </ActionButton>
+                          <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
+                            Craft Card
+                          </ActionButton>
+                        </ActionGrid>
+                      </ActionSection>
+                    )}
+                    {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'daylight' && (
+                      <ActionSection>
+                        <PhaseLabel>
+                          Daylight Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/3 actions taken)` : ''}
+                        </PhaseLabel>
+                        {waitingForPlayerAction && autoPlayEnabled && (
+                          <PlayerTurnIndicator>
+                            ⏳ Your turn! Take actions, then click "Advance phase" when done.
+                          </PlayerTurnIndicator>
+                        )}
+                        {actionsThisPhase >= 3 && (
+                          <PlayerTurnIndicator>
+                            Maximum actions reached! Click "Advance phase" to continue.
+                          </PlayerTurnIndicator>
+                        )}
+                        <ActionGrid>
+                          <ActionButton onClick={toggleBattle} disabled={!canPlayerTakeAction() && !isBattleMode}>
+                            {isBattleMode ? 'Cancel Battle' : 'Battle'}
+                          </ActionButton>
+                          <ActionButton onClick={toggleMarch} disabled={!canPlayerTakeAction() && !isMarchMode}>
+                            {isMarchMode ? 'Cancel March' : 'March'}
+                          </ActionButton>
+                          <ActionButton onClick={toggleRecruit} disabled={!canPlayerTakeAction() && !isRecruitMode}>
+                            {isRecruitMode ? 'Cancel Recruit' : 'Recruit'}
+                          </ActionButton>
+                          <ActionButton
+                            onClick={toggleBuildSawmill}
+                            disabled={!canPlayerTakeAction() && buildMode !== 'sawmill'}
+                          >
+                            {buildMode === 'sawmill' ? 'Cancel Build' : 'Build Sawmill'}
+                          </ActionButton>
+                          <ActionButton
+                            onClick={toggleBuildWorkshop}
+                            disabled={!canPlayerTakeAction() && buildMode !== 'workshop'}
+                          >
+                            {buildMode === 'workshop' ? 'Cancel Build' : 'Build Workshop'}
+                          </ActionButton>
+                          <ActionButton
+                            onClick={toggleBuildRecruiter}
+                            disabled={!canPlayerTakeAction() && buildMode !== 'recruiter'}
+                          >
+                            {buildMode === 'recruiter' ? 'Cancel Build' : 'Build Recruiter'}
+                          </ActionButton>
+                        </ActionGrid>
+                      </ActionSection>
+                    )}
+                    {gameState.turn.currentFaction === 'marquise' && gameState.turn.phase === 'evening' && (
+                      <ActionSection>
+                        <PhaseLabel>
+                          Evening Phase {actionsThisPhase > 0 ? `(${actionsThisPhase}/1 action taken)` : ''}
+                        </PhaseLabel>
+                        {waitingForPlayerAction && autoPlayEnabled && (
+                          <PlayerTurnIndicator>
+                            ⏳ Your turn! Take actions, then click "Advance phase" when done.
+                          </PlayerTurnIndicator>
+                        )}
+                        {actionsThisPhase >= 1 && (
+                          <PlayerTurnIndicator>
+                            Maximum actions reached! Click "Advance phase" to continue.
+                          </PlayerTurnIndicator>
+                        )}
+                        <ActionGrid>
+                          <ActionButton onClick={handleNotImplemented} disabled={!canPlayerTakeAction()}>
+                            Draw & Discard
+                          </ActionButton>
+                        </ActionGrid>
+                      </ActionSection>
+                    )}
 
-                  {/* Eyrie Dynasties Actions */}
-                  {gameState.turn.currentFaction === 'eyrie' && (
-                    <ActionSection>
-                      <PhaseLabel>
-                        {formatPhaseLabel(gameState.turn.phase)} Phase
-                      </PhaseLabel>
-                      <AIFactionMessage>
-                        AI-controlled faction. Click "Simulate Action" to let the AI take an action.
-                      </AIFactionMessage>
-                      <ActionGrid>
-                        <ActionButton
-                          onClick={() => simulateFactionAction('eyrie')}
-                          disabled={isSimulatingAction}
-                        >
-                          {isSimulatingAction ? 'Simulating...' : 'Simulate Action'}
-                        </ActionButton>
-                      </ActionGrid>
-                    </ActionSection>
-                  )}
-
-                  {/* Woodland Alliance Actions */}
-                  {gameState.turn.currentFaction === 'woodland_alliance' && (
-                    <ActionSection>
-                      <PhaseLabel>
-                        {formatPhaseLabel(gameState.turn.phase)} Phase
-                      </PhaseLabel>
-                      <AIFactionMessage>
-                        AI-controlled faction. Click "Simulate Turn" to let the AI take an action.
-                      </AIFactionMessage>
-                      <ActionGrid>
-                        <ActionButton
-                          onClick={() => simulateFactionAction('woodland_alliance')}
-                          disabled={isSimulatingAction}
-                        >
-                          {isSimulatingAction ? 'Simulating...' : 'Simulate Action'}
-                        </ActionButton>
-                      </ActionGrid>
-                    </ActionSection>
-                  )}
-                  {/* Action detail panels for Marquise */}
-                  {isPlaceWoodMode && (
-                  <MarchPanel>
-                    <MarchTitle>Place Wood</MarchTitle>
-                    {!placeWoodClearing && (
-                      <>
-                        <MarchInstruction>Select a clearing with at least one Marquise sawmill</MarchInstruction>
-                        <MarchInstruction>
-                          Wood in supply: <strong>{gameState.factions.marquise.woodInSupply}</strong>
-                        </MarchInstruction>
-                      </>
-                    )}
-                    {placeWoodClearing && (
-                      <>
-                        <MarchInstruction>
-                          Place wood in <strong>#{placeWoodClearing.toUpperCase()}</strong>
-                        </MarchInstruction>
-                        <MarchInstruction>
-                          Sawmills in clearing:{' '}
-                          <strong>
-                            {(() => {
-                              const clearing = gameState.board.clearings[placeWoodClearing]
-                              return clearing?.buildings.filter(
-                                b => b.faction === 'marquise' && b.type === 'sawmill',
-                              ).length
-                            })()}
-                          </strong>
-                        </MarchInstruction>
-                        <MarchInstruction>
-                          Existing wood tokens:{' '}
-                          <strong>
-                            {(() => {
-                              const clearing = gameState.board.clearings[placeWoodClearing]
-                              return clearing?.tokens.filter(t => t.faction === 'marquise' && t.type === 'wood').length
-                            })()}
-                          </strong>
-                        </MarchInstruction>
-                        <MarchButtonRow>
-                          <ActionButton onClick={executePlaceWood}>Place Wood</ActionButton>
-                          <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
-                        </MarchButtonRow>
-                      </>
-                    )}
-                    {!placeWoodClearing && (
-                      <MarchButtonRow>
-                        <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
-                      </MarchButtonRow>
-                    )}
-                  </MarchPanel>
-                  )}
-                  {isMarchMode && (
-                  <MarchPanel>
-                    <MarchTitle>March Action</MarchTitle>
-                    {!marchFromClearing && (
-                      <MarchInstruction>Select a clearing with Marquise warriors</MarchInstruction>
-                    )}
-                    {marchFromClearing && !marchToClearing && (
-                      <MarchInstruction>
-                        From: <strong>#{marchFromClearing.toUpperCase()}</strong> → Select adjacent destination
-                      </MarchInstruction>
-                    )}
-                    {marchFromClearing && marchToClearing && (
-                      <>
-                        <MarchInstruction>
-                          From: <strong>#{marchFromClearing.toUpperCase()}</strong> → To:{' '}
-                          <strong>#{marchToClearing.toUpperCase()}</strong>
-                        </MarchInstruction>
-                        <WarriorSelector>
-                          <label>Warriors to move:</label>
-                          <input
-                            type="range"
-                            min="1"
-                            max={maxWarriors}
-                            value={marchWarriorCount}
-                            onChange={e => setMarchWarriorCount(Number(e.target.value))}
-                          />
-                          <WarriorCount>
-                            {marchWarriorCount} / {maxWarriors}
-                          </WarriorCount>
-                        </WarriorSelector>
-                        <MarchButtonRow>
-                          <ActionButton onClick={executeMarch}>Execute March</ActionButton>
-                          <ActionButton onClick={cancelMarch}>Cancel</ActionButton>
-                        </MarchButtonRow>
-                      </>
-                    )}
-                    {marchFromClearing && !marchToClearing && (
-                      <MarchButtonRow>
-                        <ActionButton onClick={cancelMarch}>Cancel</ActionButton>
-                      </MarchButtonRow>
-                    )}
-                  </MarchPanel>
-                  )}
-                  {isBattleMode && (
-                  <MarchPanel>
-                    <MarchTitle>Battle Action</MarchTitle>
-                    {!battleClearing && <MarchInstruction>Select a clearing with enemies to battle</MarchInstruction>}
-                    {battleClearing && !battleDefender && (
-                      <>
-                        <MarchInstruction>
-                          Clearing: <strong>#{battleClearing.toUpperCase()}</strong> → Select defender
-                        </MarchInstruction>
-                        <DefenderSelector>
-                          {availableDefenders.map(faction => (
-                            <DefenderButton
-                              key={faction}
-                              onClick={() => setBattleDefender(faction)}
-                              selected={battleDefender === faction}
+                    {/* Eyrie Dynasties Actions */}
+                    {gameState.turn.currentFaction === 'eyrie' && (
+                      <ActionSection>
+                        <PhaseLabel>{formatPhaseLabel(gameState.turn.phase)} Phase</PhaseLabel>
+                        <AIFactionMessage>
+                          {gameState.turn.phase === 'daylight'
+                            ? 'Resolve the Decree one action at a time.'
+                            : 'Handle mandatory Birdsong/Evening steps before moving on.'}
+                        </AIFactionMessage>
+                        <ActionGrid>
+                          {gameState.turn.phase === 'birdsong' && (
+                            <ActionButton
+                              onClick={handleEyrieBirdsong}
+                              disabled={isSimulatingAction || actionsThisPhase > 0}
                             >
-                              {FACTION_META[faction].label}
-                            </DefenderButton>
-                          ))}
-                        </DefenderSelector>
-                      </>
+                              {isSimulatingAction ? 'Resolving...' : 'Resolve Birdsong'}
+                            </ActionButton>
+                          )}
+                          {gameState.turn.phase === 'daylight' && (
+                            <ActionButton onClick={() => simulateFactionAction('eyrie')} disabled={isSimulatingAction}>
+                              {isSimulatingAction ? 'Simulating...' : 'Simulate Decree Action'}
+                            </ActionButton>
+                          )}
+                          {gameState.turn.phase === 'evening' && (
+                            <ActionButton onClick={handleEyrieEvening} disabled={isSimulatingAction}>
+                              {isSimulatingAction ? 'Resolving...' : 'Resolve Evening'}
+                            </ActionButton>
+                          )}
+                        </ActionGrid>
+                      </ActionSection>
                     )}
-                    {battleClearing && battleDefender && (
-                      <>
-                        <MarchInstruction>
-                          Battle in <strong>#{battleClearing.toUpperCase()}</strong>
-                          <br />
-                          Attacker: <strong>Marquise de Cat</strong>
-                          <br />
-                          Defender: <strong>{FACTION_META[battleDefender].label}</strong>
-                        </MarchInstruction>
+
+                    {/* Woodland Alliance Actions */}
+                    {gameState.turn.currentFaction === 'woodland_alliance' && (
+                      <ActionSection>
+                        <PhaseLabel>{formatPhaseLabel(gameState.turn.phase)} Phase</PhaseLabel>
+                        <AIFactionMessage>
+                          AI-controlled faction. Click "Simulate Turn" to let the AI take an action.
+                        </AIFactionMessage>
+                        <ActionGrid>
+                          <ActionButton
+                            onClick={() => simulateFactionAction('woodland_alliance')}
+                            disabled={isSimulatingAction}
+                          >
+                            {isSimulatingAction ? 'Simulating...' : 'Simulate Action'}
+                          </ActionButton>
+                        </ActionGrid>
+                      </ActionSection>
+                    )}
+                    {/* Action detail panels for Marquise */}
+                    {isPlaceWoodMode && (
+                      <MarchPanel>
+                        <MarchTitle>Place Wood</MarchTitle>
+                        {!placeWoodClearing && (
+                          <>
+                            <MarchInstruction>Select a clearing with at least one Marquise sawmill</MarchInstruction>
+                            <MarchInstruction>
+                              Wood in supply: <strong>{gameState.factions.marquise.woodInSupply}</strong>
+                            </MarchInstruction>
+                          </>
+                        )}
+                        {placeWoodClearing && (
+                          <>
+                            <MarchInstruction>
+                              Place wood in <strong>#{placeWoodClearing.toUpperCase()}</strong>
+                            </MarchInstruction>
+                            <MarchInstruction>
+                              Sawmills in clearing:{' '}
+                              <strong>
+                                {(() => {
+                                  const clearing = gameState.board.clearings[placeWoodClearing]
+                                  return clearing?.buildings.filter(
+                                    b => b.faction === 'marquise' && b.type === 'sawmill'
+                                  ).length
+                                })()}
+                              </strong>
+                            </MarchInstruction>
+                            <MarchInstruction>
+                              Existing wood tokens:{' '}
+                              <strong>
+                                {(() => {
+                                  const clearing = gameState.board.clearings[placeWoodClearing]
+                                  return clearing?.tokens.filter(t => t.faction === 'marquise' && t.type === 'wood')
+                                    .length
+                                })()}
+                              </strong>
+                            </MarchInstruction>
+                            <MarchButtonRow>
+                              <ActionButton onClick={executePlaceWood}>Place Wood</ActionButton>
+                              <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
+                            </MarchButtonRow>
+                          </>
+                        )}
+                        {!placeWoodClearing && (
+                          <MarchButtonRow>
+                            <ActionButton onClick={cancelPlaceWood}>Cancel</ActionButton>
+                          </MarchButtonRow>
+                        )}
+                      </MarchPanel>
+                    )}
+                    {isMarchMode && (
+                      <MarchPanel>
+                        <MarchTitle>March Action</MarchTitle>
+                        {!marchFromClearing && (
+                          <MarchInstruction>Select a clearing with Marquise warriors to start a move.</MarchInstruction>
+                        )}
+                        {marchFromClearing && !marchToClearing && (
+                          <MarchInstruction>
+                            From: <strong>#{marchFromClearing.toUpperCase()}</strong> → Select adjacent destination.
+                          </MarchInstruction>
+                        )}
+                        {marchFromClearing && marchToClearing && (
+                          <>
+                            <MarchInstruction>
+                              From: <strong>#{marchFromClearing.toUpperCase()}</strong> → To:{' '}
+                              <strong>#{marchToClearing.toUpperCase()}</strong>
+                            </MarchInstruction>
+                            <WarriorSelector>
+                              <label>Warriors to move:</label>
+                              <input
+                                type="range"
+                                min="1"
+                                max={Math.max(1, maxWarriors)}
+                                value={Math.min(marchWarriorCount, Math.max(1, maxWarriors))}
+                                onChange={e => setMarchWarriorCount(Number(e.target.value))}
+                              />
+                              <WarriorCount>
+                                {Math.min(marchWarriorCount, Math.max(1, maxWarriors))} / {Math.max(1, maxWarriors)}
+                              </WarriorCount>
+                            </WarriorSelector>
+                          </>
+                        )}
                         <MarchButtonRow>
-                          <ActionButton onClick={executeBattle}>Execute Battle</ActionButton>
-                          <ActionButton onClick={cancelBattle}>Cancel</ActionButton>
+                          <ActionButton onClick={executeMarch} disabled={!canExecuteMarchAction}>
+                            Execute Move
+                          </ActionButton>
+                          <ActionButton
+                            onClick={() => {
+                              setMarchFromClearing(null)
+                              setMarchToClearing(null)
+                              setMarchWarriorCount(1)
+                            }}
+                          >
+                            Clear Selection
+                          </ActionButton>
+                          <ActionButton onClick={cancelMarch}>Exit March</ActionButton>
                         </MarchButtonRow>
-                      </>
+                      </MarchPanel>
                     )}
-                    {battleClearing && !battleDefender && (
-                      <MarchButtonRow>
-                        <ActionButton onClick={cancelBattle}>Cancel</ActionButton>
-                      </MarchButtonRow>
+                    {isBattleMode && (
+                      <MarchPanel>
+                        <MarchTitle>Battle Action</MarchTitle>
+                        {!battleClearing && (
+                          <MarchInstruction>Select a clearing with enemies to battle</MarchInstruction>
+                        )}
+                        {battleClearing && !battleDefender && (
+                          <>
+                            <MarchInstruction>
+                              Clearing: <strong>#{battleClearing.toUpperCase()}</strong> → Select defender
+                            </MarchInstruction>
+                            <DefenderSelector>
+                              {availableDefenders.map(faction => (
+                                <DefenderButton
+                                  key={faction}
+                                  onClick={() => setBattleDefender(faction)}
+                                  selected={battleDefender === faction}
+                                >
+                                  {FACTION_META[faction].label}
+                                </DefenderButton>
+                              ))}
+                            </DefenderSelector>
+                          </>
+                        )}
+                        {battleClearing && battleDefender && (
+                          <>
+                            <MarchInstruction>
+                              Battle in <strong>#{battleClearing.toUpperCase()}</strong>
+                              <br />
+                              Attacker: <strong>Marquise de Cat</strong>
+                              <br />
+                              Defender: <strong>{FACTION_META[battleDefender].label}</strong>
+                            </MarchInstruction>
+                            <MarchButtonRow>
+                              <ActionButton onClick={executeBattle}>Execute Battle</ActionButton>
+                              <ActionButton onClick={cancelBattle}>Cancel</ActionButton>
+                            </MarchButtonRow>
+                          </>
+                        )}
+                        {battleClearing && !battleDefender && (
+                          <MarchButtonRow>
+                            <ActionButton onClick={cancelBattle}>Cancel</ActionButton>
+                          </MarchButtonRow>
+                        )}
+                      </MarchPanel>
                     )}
-                  </MarchPanel>
-                  )}
-                  {buildMode && (
-                  <MarchPanel>
-                    <MarchTitle>Build {buildMode.charAt(0).toUpperCase() + buildMode.slice(1)}</MarchTitle>
-                    {!buildClearing && (
-                      <>
+                    {buildMode && (
+                      <MarchPanel>
+                        <MarchTitle>Build {buildMode.charAt(0).toUpperCase() + buildMode.slice(1)}</MarchTitle>
+                        {!buildClearing && (
+                          <>
+                            <MarchInstruction>
+                              Select a clearing with Marquise warriors and available building slots
+                            </MarchInstruction>
+                            <MarchInstruction>
+                              Wood cost:{' '}
+                              <strong>
+                                {(() => {
+                                  const track = gameState.factions.marquise.buildingTracks[buildMode]
+                                  const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
+                                  if (track.builtCount >= trackDef.steps.length) return 'MAX'
+                                  return trackDef.steps[track.builtCount].costWood
+                                })()}
+                              </strong>
+                              {' · '}
+                              Wood available: <strong>{gameState.factions.marquise.woodInSupply}</strong>
+                            </MarchInstruction>
+                            <MarchInstruction>
+                              Buildings built:{' '}
+                              <strong>{gameState.factions.marquise.buildingTracks[buildMode].builtCount} / 6</strong>
+                            </MarchInstruction>
+                          </>
+                        )}
+                        {buildClearing && (
+                          <>
+                            <MarchInstruction>
+                              Build {buildMode} in <strong>#{buildClearing.toUpperCase()}</strong>
+                            </MarchInstruction>
+                            <MarchButtonRow>
+                              <ActionButton onClick={executeBuild}>Execute Build</ActionButton>
+                              <ActionButton onClick={cancelBuild}>Cancel</ActionButton>
+                            </MarchButtonRow>
+                          </>
+                        )}
+                        {!buildClearing && (
+                          <MarchButtonRow>
+                            <ActionButton onClick={cancelBuild}>Cancel</ActionButton>
+                          </MarchButtonRow>
+                        )}
+                      </MarchPanel>
+                    )}
+                    {isRecruitMode && (
+                      <MarchPanel>
+                        <MarchTitle>Recruit Warriors</MarchTitle>
                         <MarchInstruction>
-                          Select a clearing with Marquise warriors and available building slots
+                          Each recruiter places one warrior. Warriors in supply:{' '}
+                          <strong>{gameState.factions.marquise.warriorsInSupply}</strong>
                         </MarchInstruction>
-                        <MarchInstruction>
-                          Wood cost:{' '}
-                          <strong>
-                            {(() => {
-                              const track = gameState.factions.marquise.buildingTracks[buildMode]
-                              const trackDef = MARQUISE_BUILDING_TRACKS[buildMode]
-                              if (track.builtCount >= trackDef.steps.length) return 'MAX'
-                              return trackDef.steps[track.builtCount].costWood
-                            })()}
-                          </strong>
-                          {' · '}
-                          Wood available: <strong>{gameState.factions.marquise.woodInSupply}</strong>
-                        </MarchInstruction>
-                        <MarchInstruction>
-                          Buildings built:{' '}
-                          <strong>{gameState.factions.marquise.buildingTracks[buildMode].builtCount} / 6</strong>
-                        </MarchInstruction>
-                      </>
+                        {recruitTargets.length === 0 && (
+                          <>
+                            <MarchInstruction>No recruiters are on the map. Build a recruiter first.</MarchInstruction>
+                            <MarchButtonRow>
+                              <ActionButton onClick={cancelRecruit}>Close</ActionButton>
+                            </MarchButtonRow>
+                          </>
+                        )}
+                        {recruitTargets.length > 0 && (
+                          <>
+                            <MarchInstruction>
+                              Potential recruits this action: <strong>{totalPotentialRecruit}</strong>
+                            </MarchInstruction>
+                            {recruitPreview.map(target => (
+                              <MarchInstruction key={target.clearingId}>
+                                #{target.clearingId.toUpperCase()} · Recruiters {target.recruiters} → Will place{' '}
+                                {target.willPlace}
+                              </MarchInstruction>
+                            ))}
+                            <MarchButtonRow>
+                              <ActionButton onClick={executeRecruit} disabled={!canExecuteRecruit}>
+                                Recruit Everywhere
+                              </ActionButton>
+                              <ActionButton onClick={cancelRecruit}>Cancel</ActionButton>
+                            </MarchButtonRow>
+                          </>
+                        )}
+                      </MarchPanel>
                     )}
-                    {buildClearing && (
-                      <>
-                        <MarchInstruction>
-                          Build {buildMode} in <strong>#{buildClearing.toUpperCase()}</strong>
-                        </MarchInstruction>
-                        <MarchButtonRow>
-                          <ActionButton onClick={executeBuild}>Execute Build</ActionButton>
-                          <ActionButton onClick={cancelBuild}>Cancel</ActionButton>
-                        </MarchButtonRow>
-                      </>
-                    )}
-                    {!buildClearing && (
-                      <MarchButtonRow>
-                        <ActionButton onClick={cancelBuild}>Cancel</ActionButton>
-                      </MarchButtonRow>
-                    )}
-                  </MarchPanel>
-                  )}
-                  {isRecruitMode && (
-                  <MarchPanel>
-                    <MarchTitle>Recruit Warriors</MarchTitle>
-                    {!recruitClearing && (
-                      <>
-                        <MarchInstruction>Select a clearing with Marquise recruiters</MarchInstruction>
-                        <MarchInstruction>
-                          Warriors in supply: <strong>{gameState.factions.marquise.warriorsInSupply}</strong>
-                        </MarchInstruction>
-                      </>
-                    )}
-                    {recruitClearing && (
-                      <>
-                        <MarchInstruction>
-                          Recruit in <strong>#{recruitClearing.toUpperCase()}</strong>
-                        </MarchInstruction>
-                        <MarchInstruction>
-                          Recruiters in clearing:{' '}
-                          <strong>
-                            {(() => {
-                              const clearing = gameState.board.clearings[recruitClearing]
-                              return clearing.buildings.filter(b => b.faction === 'marquise' && b.type === 'recruiter')
-                                .length
-                            })()}
-                          </strong>
-                        </MarchInstruction>
-                        <WarriorSelector>
-                          <label>Warriors to recruit:</label>
-                          <input
-                            type="range"
-                            min="1"
-                            max={maxRecruitWarriors}
-                            value={recruitWarriorCount}
-                            onChange={e => setRecruitWarriorCount(Number(e.target.value))}
-                          />
-                          <WarriorCount>
-                            {recruitWarriorCount} / {maxRecruitWarriors}
-                          </WarriorCount>
-                        </WarriorSelector>
-                        <MarchButtonRow>
-                          <ActionButton onClick={executeRecruit}>Execute Recruit</ActionButton>
-                          <ActionButton onClick={cancelRecruit}>Cancel</ActionButton>
-                        </MarchButtonRow>
-                      </>
-                    )}
-                    {!recruitClearing && (
-                      <MarchButtonRow>
-                        <ActionButton onClick={cancelRecruit}>Cancel</ActionButton>
-                      </MarchButtonRow>
-                    )}
-                  </MarchPanel>
-                  )}
-                </ActionControlsColumn>
-              </ActionsLayout>
+                  </ActionControlsColumn>
+                </ActionsLayout>
               </HudPanel>
               <HudPanel>
                 <HudTitle>Action History</HudTitle>
@@ -1771,9 +2214,7 @@ export default function Home() {
                             </ActionHistoryTimestamp>
                           </ActionHistoryHeader>
                           <ActionHistoryAction>{entry.action}</ActionHistoryAction>
-                          {entry.reasoning && (
-                            <ActionHistoryReasoning>💭 {entry.reasoning}</ActionHistoryReasoning>
-                          )}
+                          {entry.reasoning && <ActionHistoryReasoning>💭 {entry.reasoning}</ActionHistoryReasoning>}
                         </ActionHistoryItem>
                       ))
                   )}
@@ -2390,7 +2831,8 @@ const PlayerTurnIndicator = styled.div`
   animation: pulse-glow 2s ease-in-out infinite;
 
   @keyframes pulse-glow {
-    0%, 100% {
+    0%,
+    100% {
       box-shadow: 0 0 0 rgba(39, 174, 96, 0.4);
     }
     50% {

@@ -150,7 +150,7 @@ export const POST = apiController<CreateGameStateParams, CreateGameStateResults>
         },
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 4000, // Increased from default 1000 to accommodate full game state
+      max_completion_tokens: 4000, // Increased from default 1000 to accommodate full game state
     })
   } catch (error) {
     console.error('[createGameState] GPT response error:', error)

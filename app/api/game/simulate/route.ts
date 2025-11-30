@@ -1,6 +1,8 @@
 import { summarizeGameState } from '@/gameState/actions'
 import { WOODLAND_BOARD_DEFINITION } from '@/gameState/boardDefinition'
-import { FactionId, GameState } from '@/gameState/schema'
+import { FactionId, GameState, Phase } from '@/gameState/schema'
+import { buildEyrieActionManagerPrompt } from '@/prompts/actionManagers/eyrie'
+import { buildWoodlandAllianceActionManagerPrompt } from '@/prompts/actionManagers/woodlandAlliance'
 import { apiController } from '@/utils/api-controller'
 import { gptChatCompletion } from '@/utils/openai'
 import { z } from 'zod'
@@ -23,6 +25,11 @@ const ActionSchema = z.discriminatedUnion('type', [
     buildingType: z.string().optional(),
   }),
   z.object({
+    type: z.literal('recruit'),
+    clearingId: z.string().optional(),
+    warriors: z.number().int().positive().optional(),
+  }),
+  z.object({
     type: z.literal('token'),
     clearingId: z.string(),
     tokenType: z.literal('sympathy'),
@@ -32,6 +39,33 @@ const ActionSchema = z.discriminatedUnion('type', [
     reason: z.string(),
   }),
 ])
+
+type SimulationActionType = z.infer<typeof ActionSchema>['type']
+
+const buildPhaseDirective = (faction: FactionId, phase: Phase, state: GameState) => {
+  if (faction === 'eyrie') {
+    if (phase === 'birdsong') {
+      return 'Birdsong: resolve Emergency Orders and add cards to the Decree. If those bookkeeping steps cannot be represented with the current action schema, return a pass action explaining that the Decree is already set.'
+    }
+    if (phase === 'daylight') {
+      return 'Daylight: resolve the Decree columns in order (Recruit → Move → Battle → Build). Take each card action even if it means moving or battling in suboptimal spots, and only pass if a specific column cannot be completed.'
+    }
+    return 'Evening: score victory points from roosts and draw/discard. If no schema action applies, return a pass that summarizes the scoring.'
+  }
+
+  if (faction === 'woodland_alliance') {
+    if (phase === 'birdsong') {
+      return 'Birdsong: Revolt in sympathetic clearings or Spread Sympathy into adjacent clearings (modeled via the token action) while obeying supporter costs and Martial Law.'
+    }
+    if (phase === 'daylight') {
+      return 'Daylight: Craft items, Mobilize supporters, or Train officers. In this simplified schema, prefer spreading sympathy tokens, repositioning warriors, or battling threats.'
+    }
+    const officerCount = state.factions.woodland_alliance.officers
+    return `Evening: take up to ${officerCount} Military Operations (move, battle, recruit at bases, or organize using the token action). Pass only after consuming the available operations.`
+  }
+
+  return 'Follow your faction rules for the current phase. If no legal action exists for this phase, return a pass and explain why.'
+}
 
 const SimulationResponseSchema = z.object({
   action: ActionSchema,
@@ -44,11 +78,23 @@ export type SimulateActionRequest = {
   recentActions?: {
     action: string
   }[]
+  diplomacyContext?: string
+  nextRequiredAction?: SimulationActionType
+  availableActions?: SimulationActionType[]
 }
 
 export type SimulateActionResponse = z.infer<typeof SimulationResponseSchema>
 
-const buildFactionPrompt = (faction: FactionId, state: GameState, recentActions: SimulateActionRequest['recentActions']) => {
+const buildFactionPrompt = (
+  faction: FactionId,
+  state: GameState,
+  recentActions: SimulateActionRequest['recentActions'],
+  options?: {
+    nextRequiredAction?: SimulationActionType
+    diplomacyContext?: string
+    availableActions?: SimulationActionType[]
+  },
+) => {
   const summary = summarizeGameState(state)
   const baseContext = `You are an experienced Root player controlling the ${faction.replace('_', ' ')} faction.
 
@@ -71,12 +117,22 @@ ${summary.clearings
   )
   .join('\n')}`
 
+  const diplomacySection = options?.diplomacyContext
+    ? `\nRecent diplomacy:\n${options.diplomacyContext}\nRespect any promises or alliances mentioned above when choosing actions.\n`
+    : ''
+
+  const forcedActionHint = options?.nextRequiredAction
+    ? `\nNext required action: ${options.nextRequiredAction.toUpperCase()}. You must attempt this action now. If it is illegal, return the pass action explaining why.\n`
+    : ''
+
+  const phaseDirective = buildPhaseDirective(faction, summary.turn.phase, state)
+
   const factionSpecific = (() => {
     if (faction === 'eyrie') {
-      return `Your actions must respect the Decree structure (recruit, move, battle, build). Prioritise legal completions that avoid Turmoil.`
+      return `${buildEyrieActionManagerPrompt(state)}${forcedActionHint}`
     }
     if (faction === 'woodland_alliance') {
-      return `You rely on sympathy expansion, guerrilla warfare, and careful officer management. Prioritise spreading sympathy, defending bases, or striking vulnerable enemies.`
+      return buildWoodlandAllianceActionManagerPrompt(state)
     }
     return `Focus on keeping tempo and making legal moves for your faction.`
   })()
@@ -94,6 +150,7 @@ ${summary.clearings
 - Move: source must contain your warriors and destination must be ADJACENT (see adjacency list below). You must leave at least one warrior behind unless rules allow otherwise.
 - Battle: clearing must contain your warriors and enemy pieces.
 - Build: clearing must be valid for your faction (Eyrie = roost anywhere with warriors, Alliance bases must match suit, etc.). CRITICAL: You can only build in clearings with AVAILABLE building slots (check the "slots available" count in the board summary above). If a clearing shows "0 available" slots, you CANNOT build there.
+- Recruit: Marquise recruits place one warrior at each recruiter (no clearingId needed). Eyrie recruits place one warrior in a roost clearing that matches the Decree card they're resolving.
 - Token: only Woodland Alliance can place sympathy where legally allowed.
 - Pass: only if no legal action exists.
 
@@ -103,6 +160,7 @@ ${adjacencySummary}
 - move: { "type": "move", "from": "c1", "to": "c2", "warriors": 2 }
 - battle: { "type": "battle", "clearingId": "c9", "defender": "marquise" }
 - build: { "type": "build", "clearingId": "c5", "buildingType": "roost" } // woodland_alliance must use base_mouse/base_rabbit/base_fox
+- recruit: { "type": "recruit", "clearingId": "c5" } // omit clearingId to recruit at all Marquise recruiters
 - token: { "type": "token", "clearingId": "c7", "tokenType": "sympathy" } // only Woodland Alliance should pick this
 - pass: { "type": "pass", "reason": "short explanation" } // when no legal move is possible`
 
@@ -115,21 +173,35 @@ ${adjacencySummary}
 
   return `${baseContext}
 
+${diplomacySection}
+
 ${factionSpecific}
+
+${phaseDirective ? `\n${phaseDirective}\n` : ''}
 
 ${recentActionText}
 
 ${actionMenu}
+
+${options?.availableActions ? `Available action types right now: ${options.availableActions.join(', ')}` : ''}
 
 Return ONLY JSON like:
 {"action":{"type":"move",...},"reasoning":"short sentence"}
 `
 }
 
-export const POST = apiController<SimulateActionRequest, SimulateActionResponse>(async ({ state, faction, recentActions }) => {
+export const POST = apiController<SimulateActionRequest, SimulateActionResponse>(
+  async ({ state, faction, recentActions, nextRequiredAction, diplomacyContext, availableActions }) => {
   const raw = await gptChatCompletion({
     messages: [
-      { role: 'system', content: buildFactionPrompt(faction, state, recentActions) },
+      {
+        role: 'system',
+        content: buildFactionPrompt(faction, state, recentActions, {
+          nextRequiredAction,
+          diplomacyContext,
+          availableActions,
+        }),
+      },
       {
         role: 'user',
         content: `Analyze the state and produce one legal action JSON exactly matching the schema described above. Do not wrap it in markdown. Double-check that:

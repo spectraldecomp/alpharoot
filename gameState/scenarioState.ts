@@ -66,6 +66,7 @@ const createBaseGameState = (): GameState => ({
       },
       roostTrack: { definitionId: 'default_roost_track', roostsPlaced: 0 },
       roostsOnMap: 0,
+      handSize: 3,
     },
     woodland_alliance: {
       faction: 'woodland_alliance',
@@ -74,6 +75,7 @@ const createBaseGameState = (): GameState => ({
       officers: 0,
       sympathyTrack: { definitionId: 'default_sympathy_track', sympathyPlaced: 0 },
       sympathyOnMap: 0,
+      supporters: { mouse: 2, rabbit: 2, fox: 2, bird: 2 },
     },
   },
   victoryTrack: {
@@ -139,7 +141,6 @@ export const recomputeDerivedGameState = (state: GameState) => {
     eyrie: 0,
     woodland_alliance: 0,
   }
-  let woodOnBoard = 0
 
   Object.values(state.board.clearings).forEach(clearing => {
     Object.entries(clearing.warriors).forEach(([faction, value]) => {
@@ -177,9 +178,6 @@ export const recomputeDerivedGameState = (state: GameState) => {
     })
 
     clearing.tokens.forEach(token => {
-      if (token.faction === 'marquise' && token.type === 'wood') {
-        woodOnBoard += 1
-      }
       if (token.faction === 'woodland_alliance' && token.type === 'sympathy') {
         state.factions.woodland_alliance.sympathyOnMap += 1
         state.factions.woodland_alliance.sympathyTrack.sympathyPlaced += 1
@@ -194,7 +192,6 @@ export const recomputeDerivedGameState = (state: GameState) => {
     WOODLAND_ALLIANCE_TOTAL_WARRIORS - warriorsOnMap.woodland_alliance
   )
 
-  state.factions.marquise.woodInSupply = Math.max(0, MARQUISE_TOTAL_WOOD - woodOnBoard)
 }
 
 const applyScenarioCommon = (

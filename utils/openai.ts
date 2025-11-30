@@ -20,7 +20,7 @@ export async function gptChatCompletion<Format = string>({
   stop,
   max_tokens = 1000,
   temperature = 1,
-  model = 'gpt-4o-mini',
+  model = 'gpt-4o',
   response_format,
 }: Params) {
   const response = await openai.chat.completions.create({
