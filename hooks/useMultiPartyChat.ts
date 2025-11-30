@@ -3,7 +3,6 @@ import { SCENARIOS } from '@/constants/scenarios'
 import { ALLIANCE_SYSTEM_PROMPT } from '@/prompts/alliance'
 import { EYRIE_SYSTEM_PROMPT } from '@/prompts/eyrie'
 import { useChatCompleteMutation } from '@/redux/api/common'
-import { last } from 'lodash'
 import { useCallback, useState } from 'react'
 
 export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
@@ -19,7 +18,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
       const { content } = await playerChatComplete({
         conversation: [
           { role: 'system', content: EYRIE_SYSTEM_PROMPT(scenario.eyrieProfile, conversation) },
-          { role: 'user' as const, content: last(conversation)?.content ?? '' },
+            { role: 'user' as const, content: conversation[conversation.length - 1]?.content ?? '' },
         ],
       }).unwrap()
       const newConversation = [
@@ -37,7 +36,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
       const { content } = await playerChatComplete({
         conversation: [
           { role: 'system', content: ALLIANCE_SYSTEM_PROMPT(scenario.allianceProfile, conversation) },
-          { role: 'user' as const, content: last(conversation)?.content ?? '' },
+            { role: 'user' as const, content: conversation[conversation.length - 1]?.content ?? '' },
         ],
       }).unwrap()
       const newConversation = [

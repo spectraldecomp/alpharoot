@@ -3,7 +3,6 @@ import { SCENARIOS } from '@/constants/scenarios'
 import { ALLIANCE_SYSTEM_PROMPT } from '@/prompts/alliance'
 import { EYRIE_SYSTEM_PROMPT } from '@/prompts/eyrie'
 import { useChatCompleteMutation } from '@/redux/api/common'
-import { last } from 'lodash'
 import { useCallback, useState } from 'react'
 import { useDebounce } from 'react-use'
 
@@ -28,7 +27,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
         await eyrieChatComplete({
           conversation: [
             { role: 'system', content: EYRIE_SYSTEM_PROMPT(scenario.eyrieProfile, conversation) },
-            { role: 'user' as const, content: last(conversation)?.content ?? '' },
+            { role: 'user' as const, content: conversation[conversation.length - 1]?.content ?? '' },
           ],
         })
           .unwrap()
@@ -50,7 +49,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
         await allianceChatComplete({
           conversation: [
             { role: 'system', content: ALLIANCE_SYSTEM_PROMPT(scenario.allianceProfile, conversation) },
-            { role: 'user' as const, content: last(conversation)?.content ?? '' },
+            { role: 'user' as const, content: conversation[conversation.length - 1]?.content ?? '' },
           ],
         })
           .unwrap()
@@ -76,7 +75,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
 
   useDebounce(
     () => {
-      if (!loadingEyrieResponse && last(conversation)?.faction !== 'eyrie') {
+      if (!loadingEyrieResponse && conversation[conversation.length - 1]?.faction !== 'eyrie') {
         eyrieChat(conversation)
       }
     },
@@ -86,7 +85,7 @@ export function useMultiPartyChat(scenario: (typeof SCENARIOS)[number]) {
 
   useDebounce(
     () => {
-      if (!loadingAllianceResponse && last(conversation)?.faction !== 'alliance') {
+      if (!loadingAllianceResponse && conversation[conversation.length - 1]?.faction !== 'alliance') {
         allianceChat(conversation)
       }
     },
