@@ -41,11 +41,13 @@ const decreeSchema = z.object({
 
 const clearingSchema = z.object({
   id: z.string(),
-  warriors: z.object({
-    marquise: z.number(),
-    eyrie: z.number(),
-    woodland_alliance: z.number(),
-  }),
+  warriors: z
+    .object({
+      marquise: z.number().default(0),
+      eyrie: z.number().default(0),
+      woodland_alliance: z.number().default(0),
+    })
+    .default({ marquise: 0, eyrie: 0, woodland_alliance: 0 }),
   buildings: z.array(
     z.object({
       id: z.string(),
@@ -87,6 +89,7 @@ const gameStateSchema = z.object({
       decree: decreeSchema,
       roostTrack: z.object({ definitionId: z.string(), roostsPlaced: z.number() }),
       roostsOnMap: z.number(),
+      handSize: z.number().default(0),
     }),
     woodland_alliance: z.object({
       faction: z.enum(['woodland_alliance']),
@@ -95,15 +98,24 @@ const gameStateSchema = z.object({
       officers: z.number(),
       sympathyTrack: z.object({ definitionId: z.string(), sympathyPlaced: z.number() }),
       sympathyOnMap: z.number(),
+      supporters: z
+        .object({
+          mouse: z.number().default(0),
+          rabbit: z.number().default(0),
+          fox: z.number().default(0),
+          bird: z.number().default(0),
+        })
+        .default({ mouse: 0, rabbit: 0, fox: 0, bird: 0 }),
     }),
   }),
   victoryTrack: z.object({ marquise: z.number(), eyrie: z.number(), woodland_alliance: z.number() }),
-  turn: z.object({ currentFaction: z.enum(['marquise', 'eyrie', 'woodland_alliance']), phase: z.enum(['birdsong', 'daylight', 'evening']), roundNumber: z.number() }),
+  turn: z.object({
+    currentFaction: z.enum(['marquise', 'eyrie', 'woodland_alliance']),
+    phase: z.enum(['birdsong', 'daylight', 'evening']),
+    roundNumber: z.number(),
+    actionSubstep: z.string().optional(),
+  }),
 })
-
-// Debug: Check the gameStateSchema
-console.log('[createGameState] gameStateSchema._def:', gameStateSchema._def)
-console.log('[createGameState] gameStateSchema shape keys:', Object.keys(gameStateSchema.shape))
 
 const normalizeGameState = (raw: z.infer<typeof gameStateSchema>): GameState => {
   const clearings = raw.board.clearings.reduce<GameState['board']['clearings']>((acc, clearing) => {
@@ -150,7 +162,7 @@ export const POST = apiController<CreateGameStateParams, CreateGameStateResults>
         },
       ],
       response_format: { type: 'json_object' },
-      max_completion_tokens: 4000, // Increased from default 1000 to accommodate full game state
+      max_tokens: 4000, // Increased from default 1000 to accommodate full game state
     })
   } catch (error) {
     console.error('[createGameState] GPT response error:', error)

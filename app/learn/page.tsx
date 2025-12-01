@@ -1222,6 +1222,11 @@ export default function Home() {
 
         const pendingActions =
           faction === 'eyrie' && gameState.turn.phase === 'daylight' ? [...eyriePendingActionsRef.current] : undefined
+        if (pendingActions && pendingActions.length === 0) {
+          setIsSimulatingAction(false)
+          schedulePhaseAdvance()
+          return
+        }
 
         const requestSimulation = async () => {
           const response = await fetch('/api/game/simulate', {

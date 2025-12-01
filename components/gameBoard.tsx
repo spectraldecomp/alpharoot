@@ -1,5 +1,13 @@
 import { BOARD_DIMENSIONS } from '@/gameState/boardDefinition'
-import { BoardDefinition, BuildingInstance, BuildingType, FactionId, GameState, Suit, TokenType } from '@/gameState/schema'
+import {
+  BoardDefinition,
+  BuildingInstance,
+  BuildingType,
+  FactionId,
+  GameState,
+  Suit,
+  TokenType,
+} from '@/gameState/schema'
 import { css } from '@emotion/react'
 import styled from '@emotion/styled'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -75,23 +83,23 @@ export const GameBoard = ({
   useEffect(() => {
     const element = viewportRef.current
     if (!element || initialScaleSet.current) return
-    
+
     const viewportWidth = element.clientWidth
     const viewportHeight = element.clientHeight
-    
+
     const scaleX = viewportWidth / BOARD_DIMENSIONS.width
     const scaleY = viewportHeight / BOARD_DIMENSIONS.height
     const optimalScale = Math.min(scaleX, scaleY) * 0.95
-    
+
     const clampedScale = clampZoom(optimalScale)
     setScale(clampedScale)
-    
+
     const scaledWidth = BOARD_DIMENSIONS.width * clampedScale
     const scaledHeight = BOARD_DIMENSIONS.height * clampedScale
     const offsetX = (viewportWidth - scaledWidth) / 2
     const offsetY = (viewportHeight - scaledHeight) / 2
     setOffset({ x: offsetX, y: offsetY })
-    
+
     initialScaleSet.current = true
   }, [])
 
@@ -139,16 +147,16 @@ export const GameBoard = ({
   const resetView = () => {
     const element = viewportRef.current
     if (!element) return
-    
+
     const viewportWidth = element.clientWidth
     const viewportHeight = element.clientHeight
     const scaleX = viewportWidth / BOARD_DIMENSIONS.width
     const scaleY = viewportHeight / BOARD_DIMENSIONS.height
     const optimalScale = Math.min(scaleX, scaleY) * 0.95
-    
+
     const clampedScale = clampZoom(optimalScale)
     setScale(clampedScale)
-    
+
     // Center the board
     const scaledWidth = BOARD_DIMENSIONS.width * clampedScale
     const scaledHeight = BOARD_DIMENSIONS.height * clampedScale
@@ -236,7 +244,7 @@ export const GameBoard = ({
                 data-selectable={isSelectable}
                 data-selected={isSelected}
                 data-board-control={isSelectable ? 'true' : undefined}
-                onClick={(e) => {
+                onClick={e => {
                   if (isSelectable) {
                     e.stopPropagation()
                     onClearingClick?.(clearing.id)
@@ -256,12 +264,14 @@ export const GameBoard = ({
                 ))}
                 {Array.from(buildingGroups.values()).map((group, idx) => (
                   <Badge key={`${clearing.id}_building_${idx}`} color={FACTION_COLORS[group.faction]}>
-                    🏛 {group.count > 1 ? `${group.count}× ` : ''}{formatBuilding(group.type)}
+                    🏛 {group.count > 1 ? `${group.count}× ` : ''}
+                    {formatBuilding(group.type)}
                   </Badge>
                 ))}
                 {Array.from(tokenGroups.values()).map((group, idx) => (
                   <Badge key={`${clearing.id}_token_${idx}`} color={FACTION_COLORS[group.faction]}>
-                    {group.count > 1 ? `${group.count}× ` : ''}{formatToken(group.type)}
+                    {group.count > 1 ? `${group.count}× ` : ''}
+                    {formatToken(group.type)}
                   </Badge>
                 ))}
               </BadgeRow>
@@ -314,7 +324,7 @@ const formatBuilding = (type: BuildingInstance['type']) => {
 }
 
 const formatToken = (type: TokenType) => {
-  if (type === 'wood') return '🪵 Wood'
+  if (type === 'wood') return '🌲 Wood'
   if (type === 'sympathy') return '✊ Sympathy'
   return 'Token'
 }
@@ -385,22 +395,23 @@ const ClearingCircle = styled.div<{ suit: Suit }>`
       font-size: 32px;
       line-height: 1;
     }
-    
-    &[data-selectable="true"] {
+
+    &[data-selectable='true'] {
       animation: pulse 1.5s ease-in-out infinite;
       border-color: #ff6b35;
       border-width: 5px;
     }
-    
-    &[data-selected="true"] {
+
+    &[data-selected='true'] {
       border-color: #ff6b35;
       border-width: 6px;
       box-shadow: 0 0 20px rgba(255, 107, 53, 0.8), 0 12px 24px rgba(0, 0, 0, 0.25);
       animation: none;
     }
-    
+
     @keyframes pulse {
-      0%, 100% {
+      0%,
+      100% {
         box-shadow: 0 0 10px rgba(255, 107, 53, 0.5), 0 12px 24px rgba(0, 0, 0, 0.25);
       }
       50% {
