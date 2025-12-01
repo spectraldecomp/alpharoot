@@ -15,7 +15,7 @@ import styled from '@emotion/styled'
 import { DEFAULT_LIGHT_THEME } from '@wookiejin/react-component'
 import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SimulateActionResponse } from '../api/game/simulate/route'
 import { ChatCompletionParams } from '../api/chatComplete/route'
 
@@ -74,7 +74,7 @@ const formatDiplomacyContext = (conversation: MultiPartyChat) => {
     .join('\n')
 }
 
-export default function Home() {
+function LearnPageContent() {
   const searchParams = useSearchParams()
   const scenarioIndex = Number(searchParams.get('scenario') ?? 0)
   const scenario =
@@ -2845,3 +2845,11 @@ const PlayerTurnIndicator = styled.div`
     }
   }
 `
+
+export default function Home() {
+  return (
+    <Suspense fallback={null}>
+      <LearnPageContent />
+    </Suspense>
+  )
+}
